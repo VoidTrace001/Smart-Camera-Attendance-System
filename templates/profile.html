@@ -1,0 +1,103 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Institutional Profile</h1>
+    <p>Secure management of your VeriVault identity and credentials.</p>
+</header>
+
+<div style="display: flex; gap: 3rem;">
+    <!-- Main Form Section -->
+    <div style="flex: 2; display: flex; flex-direction: column; gap: 2rem;">
+        
+        <div class="card" style="border-top: 5px solid var(--primary-color);">
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 2.5rem;">
+                <div style="width: 60px; height: 60px; background: var(--secondary-color); border-radius: 15px; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 800; color: var(--primary-color); border: 1px solid var(--border-color);">
+                    {{ user.full_name[0] }}
+                </div>
+                <div>
+                    <h3 style="margin: 0; font-size: 1.5rem;">Account Information</h3>
+                    <p style="margin: 0; color: var(--text-muted); font-size: 0.9rem;">Update your professional details and access keys.</p>
+                </div>
+            </div>
+
+            <form action="/profile" method="POST">
+                <!-- Personal Info Group -->
+                <div style="background: var(--secondary-color); padding: 2rem; border-radius: var(--radius-lg); border: 1px solid var(--border-color); margin-bottom: 2rem;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label>Professional Full Name</label>
+                            <input type="text" name="full_name" value="{{ user.full_name }}" required style="font-weight: 600;">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label>Institutional Department</label>
+                            <div style="padding: 0.75rem 1rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: var(--radius-md); font-weight: 700; color: var(--primary-color);">
+                                {{ user.department if user.department else 'Student Services Department' }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Access Group -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
+                    <div class="form-group">
+                        <label>Portal Username</label>
+                        <input type="text" name="username" value="{{ user.username }}" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Security Key (New Password)</label>
+                        <input type="password" name="password" placeholder="Leave blank to keep current">
+                    </div>
+                </div>
+
+                {% if session.get('role') == 'Teacher' %}
+                <div class="form-group" style="margin-bottom: 2.5rem;">
+                    <label>Assigned Academic Subjects</label>
+                    <textarea name="subjects" placeholder="e.g. Mathematics, AI, Financial Accounting" style="height: 80px; resize: none;">{{ user.subjects if user.subjects else '' }}</textarea>
+                    <small style="color: var(--text-muted);">List the subjects you are authorized to track attendance for.</small>
+                </div>
+                {% endif %}
+
+                <div style="display: flex; justify-content: flex-end;">
+                    <button type="submit" class="btn" style="padding: 1rem 3rem; font-size: 1rem; letter-spacing: 0.05em;">
+                        💾 SAVE PROFILE UPDATES
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Right Sidebar Info -->
+    <div style="flex: 1; display: flex; flex-direction: column; gap: 2rem;">
+        <div class="card" style="background: var(--text-main); color: white; border: none;">
+            <h3 style="color: white; font-size: 1rem; letter-spacing: 0.1em; opacity: 0.8;">SECURITY STATUS</h3>
+            <div style="margin-top: 1.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <span style="font-size: 0.9rem; opacity: 0.7;">Account Level</span>
+                    <span class="badge" style="background: var(--primary-color); color: white;">{{ user.role }}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <span style="font-size: 0.9rem; opacity: 0.7;">Biometrics</span>
+                    <span style="color: var(--success); font-weight: 700;">ACTIVE</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.9rem; opacity: 0.7;">Last Sync</span>
+                    <span style="font-size: 0.85rem; font-weight: 600;">Just Now</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="border: 1px solid var(--danger); background: var(--danger-light);">
+            <h3 style="color: var(--danger); font-size: 1.1rem; margin-bottom: 1rem;">Terminate Account</h3>
+            <p style="font-size: 0.85rem; color: #991b1b; margin-bottom: 1.5rem; line-height: 1.5;">
+                Permanently remove your profile and all associated biometric encodings from the institutional network.
+            </p>
+            <form action="/delete_account" method="POST" onsubmit="return confirm('CRITICAL: This will permanently delete your institutional access. Proceed?');">
+                <button type="submit" class="btn" style="background: var(--danger); width: 100%; box-shadow: none;">
+                    DESTROY ACCOUNT
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

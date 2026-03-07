@@ -1,0 +1,72 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Leave Authorization Portal</h1>
+    <p>Review and process institutional leave applications.</p>
+</header>
+
+<div class="card">
+    <h3 style="margin-bottom: 2rem;">Pending & Recent Requests</h3>
+    {% if requests %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Student Information</th>
+                    <th>Requested Dates</th>
+                    <th>Reason / Justification</th>
+                    <th>Current Status</th>
+                    <th style="text-align: center;">Control Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in requests %}
+                <tr>
+                    <td>
+                        <div style="font-weight: 700; color: var(--text-main);">{{ r.student_name }}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">{{ r.course }} • {{ r.year }}</div>
+                    </td>
+                    <td>
+                        <div style="font-weight: 600; color: var(--primary-color);">{{ r.start_date }}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted); text-align: center;">to</div>
+                        <div style="font-weight: 600; color: var(--primary-color);">{{ r.end_date }}</div>
+                    </td>
+                    <td style="max-width: 300px; font-size: 0.9rem; line-height: 1.5; color: var(--text-main);">
+                        {{ r.reason }}
+                        <div style="margin-top: 0.5rem; font-size: 0.75rem; color: var(--text-muted); font-style: italic;">
+                            Applied on: {{ r.applied_on }}
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge {% if r.status == 'Approved' %}badge-success{% elif r.status == 'Pending' %}badge-warning{% else %}badge-danger{% endif %}">
+                            {{ r.status }}
+                        </span>
+                    </td>
+                    <td style="text-align: center;">
+                        {% if r.status == 'Pending' %}
+                        <div style="display: flex; gap: 0.75rem; justify-content: center;">
+                            <form action="/admin/leave/update/{{ r.id }}/Approved" method="POST">
+                                <button type="submit" class="btn" style="background: var(--success); padding: 0.5rem 1rem; font-size: 0.8rem;">APPROVE</button>
+                            </form>
+                            <form action="/admin/leave/update/{{ r.id }}/Rejected" method="POST">
+                                <button type="submit" class="btn" style="background: var(--danger); padding: 0.5rem 1rem; font-size: 0.8rem;">REJECT</button>
+                            </form>
+                        </div>
+                        {% else %}
+                        <span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">Request Processed</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div style="text-align: center; padding: 5rem 0;">
+        <div style="font-size: 4rem; margin-bottom: 1.5rem; opacity: 0.2;">✉️</div>
+        <p style="color: var(--text-muted); font-size: 1.2rem;">No leave applications to display.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

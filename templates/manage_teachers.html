@@ -1,0 +1,97 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Faculty Governance</h1>
+    <p>Manage institutional teaching staff and departmental assignments.</p>
+</header>
+
+<div class="card" style="margin-bottom: 3rem; border-top: 4px solid var(--primary-color);">
+    <h3>Register New Faculty Member</h3>
+    <form action="/teachers" method="POST" style="margin-top: 2rem;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem;">
+            <div class="form-group">
+                <label>Full Name</label>
+                <input type="text" name="full_name" required placeholder="e.g. Prof. Alan Turing">
+            </div>
+            
+            <div class="form-group">
+                <label>Institutional Username</label>
+                <input type="text" name="username" required placeholder="e.g. alan_t">
+            </div>
+
+            <div class="form-group">
+                <label>Secure Password</label>
+                <input type="password" name="password" required placeholder="••••••••">
+            </div>
+
+            <div class="form-group">
+                <label>Department</label>
+                <select name="department" required>
+                    <option value="BBA">BBA Department</option>
+                    <option value="BCA">BCA Department</option>
+                    <option value="BCom">BCom Department</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+            <label>Assigned Subjects</label>
+            <input type="text" name="subjects" placeholder="e.g. Data Structures, Business Ethics, Python">
+            <small style="color: var(--text-muted);">List primary subjects for automated timetable sync.</small>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; margin-top: 1.5rem;">
+            <button type="submit" class="btn" style="padding: 0.85rem 3rem;">+ Add Faculty Member</button>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h3 style="margin-bottom: 2rem;">Active Faculty Directory</h3>
+    {% if teachers %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Faculty Name</th>
+                    <th>ID / Username</th>
+                    <th>Department</th>
+                    <th>Assigned Specializations</th>
+                    <th style="text-align: center;">Control</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in teachers %}
+                <tr>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <div style="width: 35px; height: 35px; background: var(--secondary-color); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; color: var(--primary-color);">{{ t.full_name[0] }}</div>
+                            <strong style="color: var(--text-main);">{{ t.full_name }}</strong>
+                        </div>
+                    </td>
+                    <td><span style="font-family: monospace; color: var(--text-muted);">{{ t.username }}</span></td>
+                    <td>
+                        <span class="badge badge-primary">{{ t.department }}</span>
+                    </td>
+                    <td style="font-size: 0.9rem; color: var(--text-muted);">
+                        {{ t.subjects if t.subjects else 'General Assignments' }}
+                    </td>
+                    <td style="text-align: center;">
+                        <form action="{{ url_for('delete_teacher_route', id=t.id) }}" method="POST" onsubmit="return confirm('Remove this faculty member?');">
+                            <button type="submit" style="color: var(--danger); background: none; border: none; cursor: pointer; font-weight: 700; font-size: 0.8rem; text-decoration: underline;">REMOVE</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div style="text-align: center; padding: 4rem 0;">
+        <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">👨‍🏫</div>
+        <p style="color: var(--text-muted); font-size: 1.1rem;">No faculty members registered yet.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

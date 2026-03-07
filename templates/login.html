@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VeriVault AI - Secure Portal Access</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4f46e5;
+            --primary-hover: #4338ca;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --bg-color: #f1f5f9;
+            --card-bg: rgba(255, 255, 255, 0.95);
+            --border-color: #e2e8f0;
+            --radius-xl: 1.5rem;
+            --radius-md: 0.75rem;
+            --transition-all: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        [data-theme="dark"] {
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --bg-color: #020617;
+            --card-bg: rgba(15, 23, 42, 0.95);
+            --border-color: #1e293b;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            overflow: hidden;
+            transition: background-color 0.5s ease;
+        }
+
+        /* Split Screen Layout */
+        .login-left {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+            position: relative;
+            z-index: 10;
+        }
+
+        .login-right {
+            flex: 1;
+            background: linear-gradient(135deg, #4f46e5, #8b5cf6, #3b82f6);
+            background-size: 200% 200%;
+            animation: gradientBG 10s ease infinite;
+            display: none;
+            position: relative;
+            overflow: hidden;
+        }
+
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        @media (min-width: 900px) {
+            .login-right { display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; padding: 4rem; text-align: center; }
+        }
+
+        /* Decorative Floating Shapes */
+        .shape {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            animation: float 8s infinite ease-in-out;
+        }
+        .shape-1 { width: 300px; height: 300px; top: -50px; right: -50px; animation-delay: 0s; }
+        .shape-2 { width: 200px; height: 200px; bottom: 10%; left: -50px; animation-delay: 2s; border-radius: 20px; transform: rotate(45deg); }
+        .shape-3 { width: 150px; height: 150px; top: 40%; right: 20%; animation-delay: 4s; }
+
+        @keyframes float {
+            0% { transform: translateY(0px) rotate(0deg); }
+            50% { transform: translateY(-30px) rotate(10deg); }
+            100% { transform: translateY(0px) rotate(0deg); }
+        }
+
+        /* Login Card Styling */
+        .login-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            padding: 3.5rem 3rem;
+            border-radius: var(--radius-xl);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15), 0 0 0 1px var(--border-color);
+            width: 100%;
+            max-width: 480px;
+            animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(40px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 2.5rem;
+        }
+
+        .login-header h2 {
+            font-size: 2rem;
+            font-weight: 800;
+            margin: 0 0 0.5rem 0;
+            letter-spacing: -0.03em;
+        }
+
+        .login-header p {
+            color: var(--text-muted);
+            margin: 0;
+            font-size: 1rem;
+        }
+
+        /* Modern Inputs */
+        .form-group {
+            margin-bottom: 1.5rem;
+            position: relative;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: var(--text-main);
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 1rem 1.2rem;
+            font-size: 1rem;
+            font-family: inherit;
+            color: var(--text-main);
+            background-color: transparent;
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius-md);
+            transition: var(--transition-all);
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.15);
+            background-color: var(--bg-color);
+        }
+
+        /* Dynamic Input Icons */
+        .input-icon {
+            position: absolute;
+            right: 1.2rem;
+            top: 2.4rem;
+            color: var(--text-muted);
+            transition: var(--transition-all);
+        }
+        .form-control:focus + .input-icon { color: var(--primary-color); }
+
+        /* The Button */
+        .btn-login {
+            width: 100%;
+            padding: 1rem;
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: white;
+            background: linear-gradient(135deg, var(--primary-color), #6366f1);
+            border: none;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: var(--transition-all);
+            margin-top: 1rem;
+            box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-login:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(79, 70, 229, 0.5);
+        }
+
+        .btn-login:active { transform: translateY(0); }
+
+        /* Flash Messages styled for login */
+        .login-alert {
+            padding: 1rem;
+            border-radius: var(--radius-md);
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            animation: slideDown 0.3s ease;
+        }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        .login-alert.error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+        .login-alert.success { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+
+        /* Logo Component */
+        .brand-logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            margin-bottom: 2rem;
+        }
+        .brand-icon {
+            width: 40px; height: 40px; background: #0f172a; border-radius: 10px; display: flex; align-items: center; justify-content: center; position: relative;
+        }
+        .brand-icon::before {
+            content: ''; position: absolute; width: 18px; height: 18px; border: 3px solid var(--primary-color); border-radius: 50%;
+        }
+        .brand-text { font-size: 1.5rem; font-weight: 800; letter-spacing: 0.05em; color: var(--text-main); }
+        .brand-text span { color: var(--primary-color); }
+        
+        .theme-toggle-fixed {
+            position: absolute;
+            top: 2rem;
+            right: 2rem;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            width: 44px; height: 44px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: var(--transition-all); font-size: 1.2rem;
+        }
+        .theme-toggle-fixed:hover { background: var(--bg-color); transform: rotate(15deg); }
+    </style>
+</head>
+<body data-theme="light">
+    
+    <button class="theme-toggle-fixed" onclick="toggleTheme()" title="Toggle Theme">
+        <span id="themeIcon">🌓</span>
+    </button>
+
+    <div class="login-left">
+        <div class="login-card">
+            <div class="brand-logo">
+                <div class="brand-icon"></div>
+                <div class="brand-text">VERI<span>VAULT</span></div>
+            </div>
+
+            <div class="login-header">
+                <h2>Welcome Back</h2>
+                <p>Enter your credentials to access the secure portal.</p>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% if messages %}
+                {% for category, message in messages %}
+                  <div class="login-alert {{ category }}">
+                      {% if category == 'error' %}⚠️{% else %}✅{% endif %} {{ message }}
+                  </div>
+                {% endfor %}
+              {% endif %}
+            {% endwith %}
+
+            <form action="/login" method="POST">
+                <div class="form-group">
+                    <label for="username">Institutional ID</label>
+                    <input type="text" id="username" name="username" class="form-control" required placeholder="Email or Username" autocomplete="username">
+                    <span class="input-icon">👤</span>
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Security Key</label>
+                    <input type="password" id="password" name="password" class="form-control" required placeholder="Password or EDC Number" autocomplete="current-password">
+                    <span class="input-icon">🔒</span>
+                </div>
+                
+                <button type="submit" class="btn-login">
+                    Authorize Access <span>→</span>
+                </button>
+            </form>
+            
+            <div style="margin-top: 2rem; text-align: center; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+                <p style="font-size: 0.8rem; color: var(--text-muted);">
+                    Protected by VeriVault Deep AI Recognition.<br>
+                    Unauthorized access is strictly prohibited.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="login-right">
+        <div class="shape shape-1"></div>
+        <div class="shape shape-2"></div>
+        <div class="shape shape-3"></div>
+        
+        <div style="position: relative; z-index: 1;">
+            <div style="font-size: 5rem; margin-bottom: 1rem; animation: pulse-ring 3s infinite;">👁️‍🗨️</div>
+            <h1 style="font-size: 3.5rem; font-weight: 800; margin: 0; letter-spacing: -0.05em; line-height: 1.1;">Next-Gen<br>Attendance.</h1>
+            <p style="font-size: 1.25rem; font-weight: 500; opacity: 0.9; margin-top: 1.5rem; max-width: 400px; line-height: 1.6;">
+                Seamless facial recognition, real-time analytics, and automated institution management.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // Theme management for login page
+        function toggleTheme() {
+            const body = document.body;
+            const currentTheme = body.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            body.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            document.getElementById('themeIcon').innerText = newTheme === 'dark' ? '🌙' : '☀️';
+        }
+
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.body.setAttribute('data-theme', savedTheme);
+        document.getElementById('themeIcon').innerText = savedTheme === 'dark' ? '🌙' : '☀️';
+    </script>
+</body>
+</html>

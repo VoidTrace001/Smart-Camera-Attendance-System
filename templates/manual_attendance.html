@@ -1,0 +1,86 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Institutional Record Override</h1>
+    <p>Apply manual status updates for students across specific date ranges.</p>
+</header>
+
+<div class="card" style="max-width: 800px; margin: 0 auto; border-top: 4px solid var(--primary-color);">
+    <div style="margin-bottom: 2.5rem;">
+        <h3 style="margin-bottom: 0.5rem;">Batch Data Correction</h3>
+        <p style="color: var(--text-muted); font-size: 0.9rem;">
+            Select a student and a date range to authorize a status override (e.g., Medical Leave).
+        </p>
+    </div>
+
+    <form action="/manual_attendance" method="POST">
+        <div style="display: flex; gap: 1.5rem; margin-bottom: 1.5rem;">
+            <div class="form-group" style="flex: 1;">
+                <label>Institutional Course</label>
+                <select id="courseFilter" onchange="filterStudents()" required>
+                    <option value="All">All Departments</option>
+                    <option value="BBA">BBA</option>
+                    <option value="BCA">BCA</option>
+                    <option value="BCom">BCom</option>
+                </select>
+            </div>
+
+            <div class="form-group" style="flex: 2;">
+                <label>Target Student</label>
+                <select name="student_id" id="studentSelect" required>
+                    <option value="" disabled selected>-- Select student --</option>
+                    {% for s in students %}
+                    <option value="{{ s.id }}" data-course="{{ s.course }}">{{ s.name }} ({{ s.course }} - {{ s.year }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Institutional Status to Apply</label>
+            <select name="status" required style="font-weight: 700; color: var(--primary-color);">
+                <option value="On Leave">On Leave (Medical/Personal)</option>
+                <option value="Present">Present (Manual Verification)</option>
+                <option value="Absent">Absent (Disciplinary)</option>
+            </select>
+        </div>
+
+        <div style="display: flex; gap: 1.5rem; background: var(--secondary-color); padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <label>Effective From</label>
+                <input type="date" name="start_date" required value="{{ today }}">
+            </div>
+
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <label>Effective Until</label>
+                <input type="date" name="end_date" required value="{{ today }}">
+            </div>
+        </div>
+
+        <div style="margin-top: 3rem; border-top: 1px solid var(--border-color); padding-top: 2rem; display: flex; justify-content: flex-end;">
+            <button type="submit" class="btn" style="padding: 1rem 3rem; font-size: 1.1rem;">
+                ✔ AUTHORIZE BATCH OVERRIDE
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+    function filterStudents() {
+        const course = document.getElementById('courseFilter').value;
+        const select = document.getElementById('studentSelect');
+        const options = select.getElementsByTagName('option');
+
+        for (let i = 1; i < options.length; i++) {
+            const studentCourse = options[i].getAttribute('data-course');
+            if (course === "All" || studentCourse === course) {
+                options[i].style.display = "";
+            } else {
+                options[i].style.display = "none";
+            }
+        }
+        select.value = ""; // Reset selection
+    }
+</script>
+{% endblock %}

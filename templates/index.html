@@ -1,0 +1,279 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Welcome, {{ session.get('full_name') }}</h1>
+    <p>{{ session.get('role') }} Portal - VeriVault AI Systems</p>
+</header>
+
+<!-- Quick Stats / Analytics -->
+<div style="display: flex; gap: 1.5rem; margin-bottom: 2.5rem;">
+    {% if session.get('role') == 'Admin' %}
+    <div class="card" style="flex: 1; border-left: 6px solid var(--primary-color);">
+        <h3 style="margin: 0; color: var(--text-muted); font-size: 1rem; font-weight: 600; text-transform: uppercase;">Total Students</h3>
+        <p id="stat-total" class="stat-value" style="color: var(--primary-color);">{{ stats.total }}</p>
+    </div>
+    <div class="card" style="flex: 1; border-left: 6px solid var(--success);">
+        <h3 style="margin: 0; color: var(--text-muted); font-size: 1rem; font-weight: 600; text-transform: uppercase;">Present Today</h3>
+        <p id="stat-present" class="stat-value" style="color: var(--success);">{{ stats.present }}</p>
+    </div>
+    <div class="card" style="flex: 1; border-left: 6px solid var(--warning);">
+        <h3 style="margin: 0; color: var(--text-muted); font-size: 1rem; font-weight: 600; text-transform: uppercase;">On Leave</h3>
+        <p id="stat-leave" class="stat-value" style="color: var(--warning);">{{ stats.leave }}</p>
+    </div>
+    {% else %}
+    <div class="card" style="flex: 2; border-left: 6px solid var(--primary-color);">
+        <h3 style="margin: 0; color: var(--text-muted); font-size: 1rem; font-weight: 600; text-transform: uppercase;">Current Status</h3>
+        <p style="font-size: 1.25rem; margin-top: 0.5rem; font-weight: 500;">
+            You are logged in as a <strong>Teacher</strong>. 
+            The camera is ready to take attendance for your scheduled classes.
+        </p>
+    </div>
+    <div class="card" style="flex: 1; border-left: 6px solid var(--warning);">
+        <h3 style="margin: 0; color: var(--text-muted); font-size: 1rem; font-weight: 600; text-transform: uppercase;">On Leave</h3>
+        <p id="stat-leave" class="stat-value" style="color: var(--warning);">{{ stats.leave }}</p>
+    </div>
+    {% endif %}
+</div>
+
+<div style="display: flex; gap: 2rem; margin-bottom: 2.5rem;">
+    <!-- Left Column: Camera and Announcements -->
+    <div style="flex: 2; display: flex; flex-direction: column; gap: 2rem;">
+        
+        <!-- Live Feed Card -->
+        <div class="card" style="text-align: center; position: relative;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                <h3>Live Recognition Feed</h3>
+                <div id="cameraBadge" style="padding: 0.4rem 1rem; border-radius: 99px; background: #94a3b8; color: white; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.05em;">
+                    HARDWARE LOCKED
+                </div>
+            </div>
+
+            <div id="cameraPlaceholder" style="width: 100%; height: 400px; background: var(--bg-color); border-radius: var(--radius-lg); border: 2px dashed var(--border-color); display: flex; flex-direction: column; justify-content: center; align-items: center;">
+                <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;">🔒</div>
+                <p style="color: var(--text-muted); font-weight: 500;">Camera access requires manual authorization.</p>
+                <button onclick="startCamera()" class="btn" style="margin-top: 1.5rem;">Grant Permission & Start</button>
+            </div>
+
+            <div id="cameraFeedContainer" style="display: none; border-radius: var(--radius-lg); overflow: hidden; background: #000; border: 4px solid var(--text-main);">
+                <img id="videoFeed" src="" width="100%" height="auto" alt="Live Feed">
+            </div>
+
+            <div id="cameraActions" style="display: none; margin-top: 1.5rem; justify-content: center; gap: 1rem;">
+                <button onclick="stopCamera()" class="btn" style="background: var(--danger);">Disable Hardware</button>
+                <div style="text-align: left; background: var(--secondary-color); padding: 0.5rem 1rem; border-radius: var(--radius-md); border-left: 4px solid var(--success);">
+                    <span style="display: block; font-size: 0.7rem; font-weight: 800; color: var(--text-muted);">REAL-TIME</span>
+                    <span style="font-weight: 700; font-size: 0.9rem;">Tracking Active</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Announcements Card -->
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                <h3>📢 Institutional Notices</h3>
+                {% if session.get('role') in ['Admin', 'Teacher'] %}
+                <button onclick="document.getElementById('postAnnouncementModal').style.display='flex'" class="btn" style="padding: 0.5rem 1rem; font-size: 0.8rem;">+ New Notice</button>
+                {% endif %}
+            </div>
+            
+            <div id="announcementList">
+                {% if announcements %}
+                    {% for a in announcements %}
+                    <div style="padding: 1.5rem; background: var(--secondary-color); border-radius: var(--radius-md); margin-bottom: 1.25rem; border-left: 5px solid var(--primary-color);">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <strong style="font-size: 1.1rem;">{{ a.title }}</strong>
+                            <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">{{ a.created_at }}</span>
+                        </div>
+                        <p style="margin: 0; font-size: 0.95rem; color: var(--text-main); line-height: 1.6;">{{ a.content }}</p>
+                        <div style="margin-top: 1rem; font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">
+                            By {{ a.author }} • <span class="badge" style="background: var(--card-bg); color: var(--primary-color);">{{ a.target_course }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div style="text-align: center; padding: 3rem; color: var(--text-muted);">
+                        <div style="font-size: 2rem; margin-bottom: 1rem;">📭</div>
+                        <p>No active announcements found.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Column: Stats & Logs -->
+    <div style="flex: 1; display: flex; flex-direction: column; gap: 2rem;">
+        
+        <!-- System Status Card -->
+        <div class="card" style="padding: 1.5rem;">
+            <h3 style="font-size: 1rem; margin-bottom: 1.5rem;">NETWORK STATUS</h3>
+            <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 1rem;">
+                <li style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 600;">
+                    <span>Outlook Engine</span>
+                    <span style="color: var(--success);">● Active</span>
+                </li>
+                <li style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 600;">
+                    <span>Database Cloud</span>
+                    <span style="color: var(--success);">● Synchronized</span>
+                </li>
+                <li style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 600;">
+                    <span>Recognition AI</span>
+                    <span style="color: var(--success);">● Ready</span>
+                </li>
+            </ul>
+        </div>
+
+        <!-- Recent Logs Card -->
+        <div class="card">
+            <h3>Recent Activity</h3>
+            <ul id="recentLogList" style="list-style: none; padding: 0; margin-top: 1rem;">
+                {% if recent %}
+                    {% for entry in recent %}
+                    <li style="padding: 1.25rem 0; border-bottom: 1px solid var(--border-color);">
+                        <div style="font-weight: 700; color: var(--text-main);">{{ entry.name }}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">
+                            {{ entry.time_in }} • {{ entry.subject }}
+                        </div>
+                        <span class="badge" style="margin-top: 0.5rem; background: var(--success-light); color: #065f46;">{{ entry.status }}</span>
+                    </li>
+                    {% endfor %}
+                {% else %}
+                    <li style="text-align: center; padding: 2rem; color: var(--text-muted); font-size: 0.9rem;">
+                        Waiting for detections...
+                    </li>
+                {% endif %}
+            </ul>
+            <a href="/attendance" style="display: block; text-align: center; margin-top: 1.5rem; font-size: 0.85rem; font-weight: 700; color: var(--primary-color); text-decoration: none;">VIEW ALL RECORDS →</a>
+        </div>
+    </div>
+</div>
+
+<!-- Announcement Modal -->
+<div id="postAnnouncementModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(2, 6, 23, 0.7); z-index: 4000; backdrop-filter: blur(12px); align-items: center; justify-content: center;">
+    <div class="card" style="width: 100%; max-width: 600px; padding: 0; overflow: hidden; animation: modalBounce 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55); border: none; box-shadow: 0 30px 60px -12px rgba(0,0,0,0.5);">
+        <!-- Modal Header -->
+        <div style="background: linear-gradient(135deg, var(--primary-color), #6366f1); padding: 2.5rem; text-align: center; color: white;">
+            <div style="font-size: 3.5rem; margin-bottom: 1rem;">📢</div>
+            <h2 style="margin: 0; font-size: 1.8rem; font-weight: 800; letter-spacing: -0.02em;">Broadcast System</h2>
+            <p style="opacity: 0.9; margin-top: 0.5rem; font-weight: 500;">Publish an official notice to the institution.</p>
+        </div>
+
+        <!-- Modal Body -->
+        <div style="padding: 2.5rem;">
+            <form action="/add_announcement" method="POST">
+                <div class="form-group">
+                    <label style="display: flex; justify-content: space-between;">
+                        Notice Heading
+                        <span style="font-size: 0.7rem; color: var(--text-muted);">MAX 50 CHARS</span>
+                    </label>
+                    <input type="text" name="title" required placeholder="e.g. Campus Holiday / Exam Update" maxlength="50" style="font-weight: 600;">
+                </div>
+
+                <div style="display: flex; gap: 1.5rem;">
+                    <div class="form-group" style="flex: 1;">
+                        <label>Target Audience</label>
+                        <select name="target_course" style="font-weight: 600;">
+                            <option value="All">Everyone (Global)</option>
+                            <option value="BBA">BBA Department</option>
+                            <option value="BCA">BCA Department</option>
+                            <option value="BCom">BCom Department</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <label>Priority Level</label>
+                        <select style="font-weight: 600;">
+                            <option>Standard Notice</option>
+                            <option style="color: var(--danger);">Urgent / Emergency</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Message Detail</label>
+                    <textarea name="content" required style="height: 140px; line-height: 1.6; padding: 1rem;" placeholder="Type your detailed institutional announcement here..."></textarea>
+                </div>
+
+                <div style="display: flex; gap: 1.25rem; margin-top: 2.5rem; border-top: 1px solid var(--border-color); padding-top: 2rem;">
+                    <button type="submit" class="btn" style="flex: 2; padding: 1rem; font-size: 1rem; letter-spacing: 0.05em;">
+                        🚀 PUBLISH BROADCAST
+                    </button>
+                    <button type="button" onclick="document.getElementById('postAnnouncementModal').style.display='none'" class="btn" style="background: var(--secondary-color); color: var(--text-main); flex: 1; border: 1px solid var(--border-color);">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<style>
+@keyframes modalBounce {
+    from { transform: scale(0.8); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+@keyframes logFlash {
+    0% { background-color: var(--warning-light); }
+    100% { background-color: transparent; }
+}
+</style>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+    const socket = io();
+    const logList = document.getElementById('recentLogList');
+
+    function startCamera() {
+        fetch('/api/camera/start').then(() => {
+            const video = document.getElementById('videoFeed');
+            video.src = "{{ url_for('video_feed') }}";
+            document.getElementById('cameraPlaceholder').style.display = 'none';
+            document.getElementById('cameraFeedContainer').style.display = 'block';
+            document.getElementById('cameraActions').style.display = 'flex';
+            document.getElementById('cameraBadge').innerText = 'SESSION AUTHORIZED';
+            document.getElementById('cameraBadge').style.background = 'var(--danger)';
+        });
+    }
+
+    function stopCamera() {
+        const video = document.getElementById('videoFeed');
+        video.src = ""; 
+        fetch('/api/camera/stop').then(() => {
+            document.getElementById('cameraPlaceholder').style.display = 'flex';
+            document.getElementById('cameraFeedContainer').style.display = 'none';
+            document.getElementById('cameraActions').style.display = 'none';
+            document.getElementById('cameraBadge').innerText = 'HARDWARE LOCKED';
+            document.getElementById('cameraBadge').style.background = '#94a3b8';
+        });
+    }
+
+    socket.on('update_stats', (data) => {
+        if (document.getElementById('stat-total')) document.getElementById('stat-total').innerText = data.total;
+        if (document.getElementById('stat-present')) document.getElementById('stat-present').innerText = data.present;
+        if (document.getElementById('stat-leave')) document.getElementById('stat-leave').innerText = data.leave;
+    });
+
+    socket.on('attendance_marked', (data) => {
+        if (!logList) return;
+        const empty = logList.querySelector('li[style*="text-align: center"]');
+        if (empty) empty.remove();
+
+        const li = document.createElement('li');
+        li.style.cssText = "padding: 1.25rem 0; border-bottom: 1px solid var(--border-color); animation: logFlash 2s ease-out;";
+        li.innerHTML = `
+            <div style="font-weight: 700; color: var(--text-main);">${data.name}</div>
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">
+                ${data.time} • ${data.subject}
+            </div>
+            <span class="badge" style="margin-top: 0.5rem; background: var(--success-light); color: #065f46;">${data.status}</span>
+        `;
+        logList.insertBefore(li, logList.firstChild);
+        if (logList.children.length > 5) logList.removeChild(logList.lastChild);
+        showToast(`Attendance marked: ${data.name}`, 'success');
+    });
+
+    socket.on('new_announcement', (data) => {
+        showToast(`New Announcement: ${data.title}`, 'info');
+        // Optionally refresh list or inject HTML
+    });
+</script>
+{% endblock %}

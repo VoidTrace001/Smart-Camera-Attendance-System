@@ -1,0 +1,69 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Student Directory</h1>
+    <p>View and manage all registered institutional student profiles.</p>
+</header>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <h3>Enrolled Students</h3>
+        <a href="/register" class="btn" style="padding: 0.5rem 1.25rem; font-size: 0.85rem;">+ Enroll New Student</a>
+    </div>
+
+    {% if students %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Student Name</th>
+                    <th>Course & Batch</th>
+                    <th>Outlook Identity</th>
+                    <th>Institutional IDs</th>
+                    <th style="text-align: center;">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for student in students %}
+                <tr>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <div style="width: 35px; height: 35px; background: var(--secondary-color); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; color: var(--primary-color);">
+                                {{ student.name[0] }}
+                            </div>
+                            <strong style="color: var(--text-main); font-size: 1rem;">{{ student.name }}</strong>
+                        </div>
+                    </td>
+                    <td>
+                        <div style="font-weight: 700; color: var(--primary-color);">{{ student.course }}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">{{ student.year }}</div>
+                    </td>
+                    <td style="font-size: 0.9rem; color: var(--text-main);">
+                        {{ student.outlook_email }}
+                    </td>
+                    <td style="font-size: 0.85rem; color: var(--text-muted);">
+                        <div>OU: <span style="color: var(--text-main); font-weight: 600;">{{ student.ou_id }}</span></div>
+                        <div>EDC: <span style="color: var(--text-main); font-weight: 600;">{{ student.edc_number }}</span></div>
+                    </td>
+                    <td style="text-align: center;">
+                        <form action="{{ url_for('delete_student_route', id=student.id) }}" method="POST" onsubmit="return confirm('Are you sure you want to permanently delete this student and their facial data?');">
+                            <button type="submit" style="color: var(--danger); background: none; border: none; cursor: pointer; font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; text-decoration: underline;">
+                                Remove
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div style="text-align: center; padding: 5rem 0;">
+        <div style="font-size: 4rem; margin-bottom: 1.5rem; opacity: 0.2;">🎓</div>
+        <p style="color: var(--text-muted); font-size: 1.2rem;">No students registered yet.</p>
+        <a href="/register" class="btn" style="margin-top: 1.5rem;">Begin First Enrollment</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

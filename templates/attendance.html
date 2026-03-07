@@ -1,0 +1,85 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Institutional Attendance Logs</h1>
+    <p>Comprehensive records for students and faculty tracking.</p>
+</header>
+
+<div style="display: flex; flex-direction: column; gap: 2rem;">
+    
+    <!-- Filter and Actions -->
+    <div class="card" style="display: flex; justify-content: space-between; align-items: center; padding: 1.5rem 2.5rem;">
+        <form action="/attendance" method="GET" style="display: flex; align-items: center; gap: 1rem;">
+            <label style="margin-bottom: 0; white-space: nowrap;">Filter Records:</label>
+            <input type="date" name="date" value="{{ current_date if current_date else '' }}" style="width: auto; padding: 0.5rem 1rem;">
+            <button type="submit" class="btn" style="padding: 0.5rem 1.5rem;">Apply Filter</button>
+            {% if current_date %}
+                <a href="/attendance" style="font-size: 0.85rem; color: var(--text-muted); text-decoration: underline;">Clear</a>
+            {% endif %}
+        </form>
+
+        {% if session.get('role') == 'Admin' %}
+        <a href="{{ url_for('export_csv', date=current_date) }}" class="btn" style="background: var(--success);">
+            📥 Download CSV Report
+        </a>
+        {% endif %}
+    </div>
+
+    <!-- Attendance Table -->
+    <div class="card">
+        <h3 style="margin-bottom: 1.5rem;">Activity Records</h3>
+        {% if report %}
+        <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Subject / Event</th>
+                        <th>Full Name</th>
+                        <th>Role</th>
+                        <th>Attendance Status</th>
+                        <th>Institutional Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in report %}
+                    <tr>
+                        <td style="white-space: nowrap;">
+                            <div style="font-weight: 700; color: var(--text-main);">{{ row.date }}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted);">{{ row.time_in }}</div>
+                        </td>
+                        <td><strong style="color: var(--primary-color);">{{ row.subject }}</strong></td>
+                        <td><strong style="color: var(--text-main);">{{ row.display_name }}</strong></td>
+                        <td>
+                            <span class="badge {% if row.person_role == 'Student' %}badge-primary{% else %}badge-warning{% endif %}">
+                                {{ row.person_role }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="badge {% if row.status == 'Present' %}badge-success{% elif row.status == 'On Leave' %}badge-warning{% else %}badge-danger{% endif %}">
+                                ● {{ row.status }}
+                            </span>
+                        </td>
+                        <td style="font-size: 0.85rem; color: var(--text-muted);">
+                            {% if row.person_role == 'Student' %}
+                                <div style="font-weight: 600; color: var(--text-main);">{{ row.course }} • {{ row.year }}</div>
+                                <div style="font-size: 0.75rem;">Outlook: {{ row.outlook_email }}</div>
+                            {% else %}
+                                <span style="font-style: italic;">Faculty Record</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div style="text-align: center; padding: 4rem 0;">
+            <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">📑</div>
+            <p style="color: var(--text-muted); font-size: 1.1rem;">No records found for the selected period.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

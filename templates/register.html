@@ -1,0 +1,84 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Register Student</h1>
+    <p>EThames Business School (Osmania University Affiliated)</p>
+</header>
+
+<div class="card" style="max-width: 650px; margin: 0 auto;">
+    <form action="/register" method="POST" enctype="multipart/form-data">
+        <div class="form-group">
+            <label for="name">Full Name</label>
+            <input type="text" id="name" name="name" required placeholder="e.g. John Doe">
+        </div>
+
+        <div style="display: flex; gap: 1.5rem;">
+            <div class="form-group" style="flex: 1;">
+                <label for="course">Course Program</label>
+                <select id="course" name="course" required>
+                    <option value="" disabled selected>Select Course</option>
+                    <option value="BBA">BBA</option>
+                    <option value="BCom">BCom</option>
+                    <option value="BCA">BCA</option>
+                </select>
+            </div>
+            
+            <div class="form-group" style="flex: 1;">
+                <label for="year">Academic Batch</label>
+                <select id="year" name="year" required>
+                    <option value="" disabled selected>Select Batch</option>
+                    {% for y in range(2020, 2031) %}
+                    <option value="{{ y }} Batch">{{ y }} Batch</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        
+        <div style="display: flex; gap: 1.5rem;">
+            <div class="form-group" style="flex: 1;">
+                <label for="ou_id">University ID (OU ID)</label>
+                <input type="text" id="ou_id" name="ou_id" required placeholder="e.g. 1005-XX-XXX-XXX">
+            </div>
+            <div class="form-group" style="flex: 1;">
+                <label for="edc_number">College EDC Number</label>
+                <input type="text" id="edc_number" name="edc_number" required placeholder="e.g. EDC-12345">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="outlook_email">Student Outlook Email (Login ID)</label>
+            <input type="email" id="outlook_email" name="outlook_email" required placeholder="e.g. student@ethames.ac.in">
+        </div>
+
+        <div style="display: flex; gap: 1.5rem; background: var(--secondary-color); padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 1.5rem;">
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <label for="parent_email">Parent Email (Alerts)</label>
+                <input type="email" id="parent_email" name="parent_email" required placeholder="e.g. parent@email.com">
+            </div>
+
+            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <label for="parent_phone">Parent WhatsApp (+91)</label>
+                <input type="text" id="parent_phone" name="parent_phone" required placeholder="e.g. +919876543210">
+            </div>
+        </div>
+        
+        <div class="form-group photo-upload">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📸</div>
+            <label for="photo">Upload Clear Face Photo</label>
+            <input type="file" id="photo" name="photo" accept="image/*" required>
+            <small>This image will be processed by the Deep AI for facial recognition.</small>
+        </div>
+        
+        <button type="submit" class="btn" style="width: 100%;">Complete Secure Registration</button>
+    </form>
+</div>
+
+<style>
+    .photo-upload { border: 2px dashed var(--border-color); padding: 2rem; text-align: center; border-radius: var(--radius-md); transition: var(--transition-all); }
+    .photo-upload:hover { border-color: var(--primary-color); background: var(--secondary-color); }
+    .photo-upload label { color: var(--primary-color); cursor: pointer; font-size: 1.1rem; }
+    .photo-upload input { border: none; background: transparent; margin-top: 1rem; }
+    .photo-upload small { color: var(--text-muted); display: block; margin-top: 0.5rem; }
+</style>
+{% endblock %}

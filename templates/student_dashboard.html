@@ -1,0 +1,214 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Student Portal</h1>
+    <p>Welcome, {{ session.get('full_name') }}</p>
+</header>
+
+<div style="display: flex; gap: 1.5rem; margin-bottom: 2.5rem;">
+    <div class="card" style="flex: 1; text-align: center; border-left: 6px solid var(--primary-color);">
+        <h3 style="margin: 0; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase;">Attendance %</h3>
+        <p class="stat-value" style="color: var(--text-main);">{{ stats.percentage }}%</p>
+    </div>
+    <div class="card" style="flex: 1; text-align: center;">
+        <h3 style="margin: 0; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase;">Present</h3>
+        <p class="stat-value" style="color: var(--success);">{{ stats.present }}</p>
+    </div>
+    <div class="card" style="flex: 1; text-align: center;">
+        <h3 style="margin: 0; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase;">Absent</h3>
+        <p class="stat-value" style="color: var(--danger);">{{ stats.absent }}</p>
+    </div>
+    <div class="card" style="flex: 1; text-align: center;">
+        <h3 style="margin: 0; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase;">On Leave</h3>
+        <p class="stat-value" style="color: var(--warning);">{{ stats.leave }}</p>
+    </div>
+</div>
+
+<div style="display: flex; gap: 2.5rem;">
+    <!-- Left Column -->
+    <div style="flex: 1.5; display: flex; flex-direction: column; gap: 2rem;">
+        
+        <!-- Announcements -->
+        <div class="card">
+            <h3 style="margin-bottom: 1.5rem;">📢 Institutional Notices</h3>
+            <div id="announcementList">
+                {% if announcements %}
+                    {% for a in announcements %}
+                    <div style="padding: 1.25rem; background: var(--secondary-color); border-radius: var(--radius-md); margin-bottom: 1rem; border-left: 4px solid var(--primary-color);">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <strong style="font-size: 1.1rem;">{{ a.title }}</strong>
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">{{ a.created_at }}</span>
+                        </div>
+                        <p style="margin: 0; font-size: 0.95rem; color: var(--text-main); line-height: 1.5;">{{ a.content }}</p>
+                        <div style="margin-top: 0.75rem; font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">
+                            By {{ a.author }}
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                        No active notices.
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- History -->
+        <div class="card">
+            <h3>My Recent Attendance</h3>
+            {% if history %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Time</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in history %}
+                    <tr>
+                        <td>{{ entry.date }}</td>
+                        <td>{{ entry.time_in }}</td>
+                        <td style="font-weight: 600;">{{ entry.subject }}</td>
+                        <td>
+                            <span class="badge {% if entry.status == 'Present' %}badge-success{% elif entry.status == 'On Leave' %}badge-warning{% else %}badge-danger{% endif %}">
+                                {{ entry.status }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p style="color: var(--text-muted); text-align: center; padding: 2rem;">No attendance logs found.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Right Column -->
+    <div style="flex: 1; display: flex; flex-direction: column; gap: 2rem;">
+        
+        <!-- Mobile GPS Check-In -->
+        <div class="card" style="text-align: center; border-top: 4px solid var(--success);">
+            <h3 style="margin-top: 0; display: flex; align-items: center; justify-content: center; gap: 0.5rem;">
+                📍 Campus Check-In
+            </h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem;">Mark your attendance using your device's GPS if you are within 300 meters of the campus.</p>
+            <button id="gpsCheckinBtn" class="btn" style="width: 100%; background: var(--success);" onclick="requestMobileCheckin()">
+                Verify Location & Check In
+            </button>
+            <p id="gpsStatus" style="margin-top: 1rem; font-size: 0.85rem; font-weight: 600;"></p>
+        </div>
+
+        <!-- QR Code Card -->
+        <div class="card" style="text-align: center;">
+            <h3 style="margin-top: 0;">Access ID & QR</h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem;">For manual verification if required.</p>
+            <div style="background: white; padding: 1rem; border-radius: var(--radius-md); display: inline-block; border: 1px solid var(--border-color);">
+                <img src="/student/qr" alt="QR Code" style="width: 180px; height: 180px;">
+            </div>
+            <div style="margin-top: 1.5rem;">
+                <a href="/student/id_card" class="btn" style="width: 100%;">🪪 Download Digital ID Card</a>
+            </div>
+        </div>
+
+        <!-- Leave Form -->
+        <div class="card">
+            <h3>Apply for Leave</h3>
+            <form action="/apply_leave" method="POST" style="margin-top: 1rem;">
+                <div class="form-group">
+                    <label>Start Date</label>
+                    <input type="date" name="start_date" required>
+                </div>
+                <div class="form-group">
+                    <label>End Date</label>
+                    <input type="date" name="end_date" required>
+                </div>
+                <div class="form-group">
+                    <label>Reason for Leave</label>
+                    <textarea name="reason" required placeholder="State your reason..." style="height: 100px;"></textarea>
+                </div>
+                <button type="submit" class="btn" style="width: 100%;">Submit Application</button>
+            </form>
+
+            <h3 style="margin-top: 2.5rem; font-size: 1rem;">MY RECENT REQUESTS</h3>
+            {% if leaves %}
+            <div style="margin-top: 1rem;">
+                {% for l in leaves %}
+                <div style="padding: 1rem 0; border-bottom: 1px solid var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 0.85rem; font-weight: 700;">{{ l.start_date }} - {{ l.end_date }}</span>
+                        <span class="badge" style="background: var(--bg-color);">{{ l.status }}</span>
+                    </div>
+                    <p style="margin: 0.25rem 0 0 0; font-size: 0.8rem; color: var(--text-muted);">{{ l.reason }}</p>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 1rem;">No applications yet.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+function requestMobileCheckin() {
+    const statusText = document.getElementById('gpsStatus');
+    const btn = document.getElementById('gpsCheckinBtn');
+    
+    if (!navigator.geolocation) {
+        statusText.innerText = "❌ Geolocation is not supported by your browser.";
+        statusText.style.color = "var(--danger)";
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerText = "Locating...";
+    statusText.innerText = "Requesting GPS signal...";
+    statusText.style.color = "var(--text-muted)";
+
+    navigator.geolocation.getCurrentPosition(
+        async (position) => {
+            try {
+                const response = await fetch('/mobile_checkin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        lat: position.coords.latitude,
+                        lon: position.coords.longitude
+                    })
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    statusText.innerText = `✅ ${data.message}`;
+                    statusText.style.color = "var(--success)";
+                    btn.innerText = "Check-In Successful";
+                    setTimeout(() => location.reload(), 2000);
+                } else {
+                    statusText.innerText = `❌ ${data.error}`;
+                    statusText.style.color = "var(--danger)";
+                    btn.disabled = false;
+                    btn.innerText = "Verify Location & Check In";
+                }
+            } catch (err) {
+                statusText.innerText = "❌ Network error. Try again.";
+                statusText.style.color = "var(--danger)";
+                btn.disabled = false;
+                btn.innerText = "Verify Location & Check In";
+            }
+        },
+        (error) => {
+            statusText.innerText = "❌ Please allow Location Access to use this feature.";
+            statusText.style.color = "var(--danger)";
+            btn.disabled = false;
+            btn.innerText = "Verify Location & Check In";
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+}
+</script>
+{% endblock %}

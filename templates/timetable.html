@@ -1,0 +1,137 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Class Schedule Management</h1>
+    <p>Configure institutional time slots and faculty assignments.</p>
+</header>
+
+{% if session.get('role') == 'Admin' %}
+<div class="card" style="margin-bottom: 3rem; border-top: 4px solid var(--primary-color);">
+    <h3 style="display: flex; align-items: center; gap: 0.5rem;">
+        <span style="font-size: 1.5rem;">📅</span> Add New Schedule Entry
+    </h3>
+    <form action="/timetable" method="POST" style="margin-top: 1.5rem;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
+            
+            <div class="form-group">
+                <label>Target Department</label>
+                <select name="course" required>
+                    <option value="BBA">BBA</option>
+                    <option value="BCom">BCom</option>
+                    <option value="BCA">BCA</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Academic Batch</label>
+                <select name="year" required>
+                    <option value="" disabled selected>Select Batch</option>
+                    {% for y in range(2020, 2031) %}
+                    <option value="{{ y }} Batch">{{ y }} Batch</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Day of Week</label>
+                <select name="day" required>
+                    <option value="Monday">Monday</option>
+                    <option value="Tuesday">Tuesday</option>
+                    <option value="Wednesday">Wednesday</option>
+                    <option value="Thursday">Thursday</option>
+                    <option value="Friday">Friday</option>
+                    <option value="Saturday">Saturday</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Start Time</label>
+                <input type="time" name="start_time" required>
+            </div>
+
+            <div class="form-group">
+                <label>End Time</label>
+                <input type="time" name="end_time" required>
+            </div>
+
+            <div class="form-group">
+                <label>Subject Name</label>
+                <input type="text" name="subject" placeholder="e.g. Data Science" required>
+            </div>
+
+            <div class="form-group" style="grid-column: span 2;">
+                <label>Assign Faculty Member</label>
+                <select name="teacher_id">
+                    <option value="">(System Default / Unassigned)</option>
+                    {% for t in teachers %}
+                    <option value="{{ t.id }}">{{ t.full_name }} ({{ t.department }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div style="margin-top: 1rem; text-align: right;">
+            <button type="submit" class="btn" style="padding: 0.85rem 2.5rem;">+ Create Schedule Entry</button>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+<div class="card">
+    <h3 style="margin-bottom: 2rem;">Weekly Academic Grid</h3>
+    {% if entries %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Day</th>
+                    <th>Time Interval</th>
+                    <th>Batch Details</th>
+                    <th>Subject</th>
+                    <th>Assigned Faculty</th>
+                    {% if session.get('role') == 'Admin' %}<th style="text-align: center;">Control</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in entries %}
+                <tr>
+                    <td><strong style="color: var(--primary-color);">{{ entry.day_of_week }}</strong></td>
+                    <td style="font-weight: 600; color: var(--text-muted);">
+                        <span class="badge" style="background: var(--bg-color); color: var(--text-main);">{{ entry.start_time }} - {{ entry.end_time }}</span>
+                    </td>
+                    <td>
+                        <div style="font-weight: 700;">{{ entry.course }}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">{{ entry.year }}</div>
+                    </td>
+                    <td><strong style="color: var(--text-main); font-size: 1rem;">{{ entry.subject }}</strong></td>
+                    <td>
+                        {% if entry.teacher_name %}
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <div style="width: 24px; height: 24px; background: var(--secondary-color); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 800; color: var(--primary-color);">{{ entry.teacher_name[0] }}</div>
+                                {{ entry.teacher_name }}
+                            </div>
+                        {% else %}
+                            <span style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">Unassigned</span>
+                        {% endif %}
+                    </td>
+                    {% if session.get('role') == 'Admin' %}
+                    <td style="text-align: center;">
+                        <form action="{{ url_for('delete_timetable_route', id=entry.id) }}" method="POST" onsubmit="return confirm('Remove this class from the schedule?');">
+                            <button type="submit" style="color: var(--danger); background: none; border: none; cursor: pointer; font-weight: 700; font-size: 0.85rem; text-decoration: underline;">DELETE</button>
+                        </form>
+                    </td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div style="text-align: center; padding: 4rem 0;">
+        <div style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.3;">🗓️</div>
+        <p style="color: var(--text-muted); font-size: 1.1rem;">No timetable entries found. Start by adding one above.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

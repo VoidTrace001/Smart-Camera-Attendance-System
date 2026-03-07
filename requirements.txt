@@ -1,0 +1,12 @@
+flask
+flask-socketio
+eventlet
+opencv-contrib-python
+numpy
+pyttsx3
+qrcode[pil]
+reportlab
+apscheduler
+twilio
+google-generativeai
+pywin32;platform_system=="Windows"
