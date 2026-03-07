@@ -11,8 +11,9 @@ def get_db_connection():
     if DB_TYPE == "postgres":
         import psycopg2
         from psycopg2.extras import RealDictCursor
-        # DATABASE_URL is provided by Railway/Supabase
         conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
+        # This makes Postgres results behave like SQLite Row objects
+        conn.cursor_factory = RealDictCursor 
         return conn
     else:
         conn = sqlite3.connect(DB_NAME)
