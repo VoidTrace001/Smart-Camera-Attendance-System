@@ -1,0 +1,117 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Universal Cloud Scanner</h1>
+    <p>Biometric verification via any device camera.</p>
+</header>
+
+<div class="card" style="max-width: 600px; margin: 0 auto; text-align: center;">
+    <div id="scannerContainer" style="position: relative; border-radius: var(--radius-lg); overflow: hidden; background: #000; aspect-ratio: 4/3;">
+        <video id="webcam" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover;"></video>
+        <canvas id="overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></canvas>
+        
+        <!-- Scanning Animation -->
+        <div id="scanLine" style="position: absolute; top: 0; left: 0; width: 100%; height: 2px; background: var(--primary-color); box-shadow: 0 0 15px var(--primary-color); animation: scan 2s infinite linear;"></div>
+    </div>
+
+    <div id="resultBox" style="margin-top: 2rem; padding: 1.5rem; border-radius: var(--radius-md); background: var(--secondary-color); min-height: 80px; display: flex; align-items: center; justify-content: center; flex-direction: column;">
+        <div id="statusText" style="font-weight: 700; font-size: 1.1rem; color: var(--text-muted);">Ready to Scan...</div>
+        <div id="matchInfo" style="margin-top: 0.5rem; display: none;">
+            <span class="badge badge-success" id="matchName" style="font-size: 1rem; padding: 0.5rem 1.5rem;"></span>
+        </div>
+    </div>
+
+    <div style="margin-top: 2rem; display: flex; gap: 1rem;">
+        <button id="startBtn" class="btn" style="flex: 1;" onclick="startScanner()">Start Camera</button>
+        <button id="stopBtn" class="btn" style="flex: 1; background: var(--danger);" onclick="stopScanner()" disabled>Stop</button>
+    </div>
+</div>
+
+<style>
+    @keyframes scan {
+        0% { top: 0; }
+        100% { top: 100%; }
+    }
+    #scannerContainer.success { border: 4px solid var(--success); }
+</style>
+
+<script>
+let video = document.getElementById('webcam');
+let canvas = document.createElement('canvas');
+let interval = null;
+const statusText = document.getElementById('statusText');
+const matchInfo = document.getElementById('matchInfo');
+const matchName = document.getElementById('matchName');
+
+async function startScanner() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: "user" }, 
+            audio: false 
+        });
+        video.srcObject = stream;
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = false;
+        
+        // Start the processing loop
+        interval = setInterval(captureAndScan, 2000); // Scan every 2 seconds
+        statusText.innerText = "🔍 Scanning for faces...";
+    } catch (err) {
+        alert("Camera Access Denied or Not Found: " + err);
+    }
+}
+
+function stopScanner() {
+    let stream = video.srcObject;
+    if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+    }
+    video.srcObject = null;
+    clearInterval(interval);
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    statusText.innerText = "Scanner Stopped.";
+    matchInfo.style.display = "none";
+}
+
+async function captureAndScan() {
+    if (!video.srcObject) return;
+
+    // Draw video frame to hidden canvas
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    
+    // Convert to base64
+    const imageData = canvas.toDataURL('image/jpeg', 0.7);
+
+    try {
+        const response = await fetch('/api/cloud_scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: imageData })
+        });
+        const result = await response.json();
+
+        if (result.status === "Success") {
+            statusText.innerText = "✅ ATTENDANCE MARKED";
+            matchName.innerText = `${result.match} (${result.role})`;
+            matchInfo.style.display = "block";
+            
+            // Visual feedback
+            document.getElementById('scannerContainer').classList.add('success');
+            setTimeout(() => {
+                document.getElementById('scannerContainer').classList.remove('success');
+                statusText.innerText = "🔍 Scanning for faces...";
+                matchInfo.style.display = "none";
+            }, 3000);
+        } else {
+            statusText.innerText = result.status || "🔍 Scanning...";
+        }
+    } catch (err) {
+        console.error("Scan Error:", err);
+    }
+}
+</script>
+{% endblock %}

@@ -10,4 +10,5 @@ apscheduler
 twilio
 google-generativeai
 gunicorn
+psycopg2-binary
 pywin32;platform_system=="Windows"

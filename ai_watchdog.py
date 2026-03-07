@@ -8,7 +8,7 @@ import google.generativeai as genai
 # ==============================================================================
 # VERIVAULT AI - FULLY AUTONOMOUS BACKEND REPAIR SYSTEM
 # ==============================================================================
-API_KEY = "AIzaSyAbkKURTHZoKU1gj4nhKTEzzBhn8Uzv53Y"
+API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyAbkKURTHZoKU1gj4nhKTEzzBhn8Uzv53Y")
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 

@@ -1,43 +1,72 @@
 import sqlite3
+import os
 from datetime import datetime
 import hashlib
 
+# Use SQLite locally, but allow PostgreSQL (Supabase) in production
+DB_TYPE = "postgres" if os.environ.get('DATABASE_URL') else "sqlite"
 DB_NAME = "attendance.db"
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if DB_TYPE == "postgres":
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        # DATABASE_URL is provided by Railway/Supabase
+        conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
+        return conn
+    else:
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 def migrate_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # List of columns to ensure exist
-    migrations = [
-        ('students', 'course', 'TEXT'),
-        ('students', 'year', 'TEXT'),
-        ('students', 'outlook_email', 'TEXT'),
-        ('students', 'parent_email', 'TEXT'),
-        ('students', 'parent_phone', 'TEXT'),
-        ('students', 'qr_hash', 'TEXT'),
-        ('students', 'ou_id', 'TEXT'),
-        ('students', 'edc_number', 'TEXT'),
-        ('users', 'face_encoding', 'TEXT'),
-        ('users', 'subjects', 'TEXT'),
-        ('attendance', 'user_id', 'INTEGER'),
-        ('attendance', 'subject', 'TEXT'),
-        ('attendance', 'status', 'TEXT DEFAULT "Present"'),
-        ('attendance', 'marked_by_user_id', 'INTEGER'),
-        ('timetable', 'teacher_id', 'INTEGER')
-    ]
-    
-    for table, column, col_type in migrations:
-        try:
-            cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}')
-            print(f"Added column {column} to {table}")
-        except sqlite3.OperationalError:
-            pass # Column likely already exists
+    # Define placeholder for SQL syntax differences
+    if DB_TYPE == "postgres":
+        # Migration for Postgres (Supabase)
+        tables = {
+            "students": [
+                ('course', 'TEXT'), ('year', 'TEXT'), ('outlook_email', 'TEXT'),
+                ('parent_email', 'TEXT'), ('parent_phone', 'TEXT'), ('qr_hash', 'TEXT'),
+                ('ou_id', 'TEXT'), ('edc_number', 'TEXT')
+            ],
+            "users": [('face_encoding', 'TEXT'), ('subjects', 'TEXT')],
+            "attendance": [
+                ('user_id', 'INTEGER'), ('subject', 'TEXT'), 
+                ('status', 'TEXT DEFAULT \'Present\''), ('marked_by_user_id', 'INTEGER')
+            ],
+            "timetable": [('teacher_id', 'INTEGER')]
+        }
+        for table, cols in tables.items():
+            for col, col_type in cols:
+                try:
+                    cursor.execute(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {col_type}')
+                except: conn.rollback()
+    else:
+        # Existing SQLite Migration
+        migrations = [
+            ('students', 'course', 'TEXT'),
+            ('students', 'year', 'TEXT'),
+            ('students', 'outlook_email', 'TEXT'),
+            ('students', 'parent_email', 'TEXT'),
+            ('students', 'parent_phone', 'TEXT'),
+            ('students', 'qr_hash', 'TEXT'),
+            ('students', 'ou_id', 'TEXT'),
+            ('students', 'edc_number', 'TEXT'),
+            ('users', 'face_encoding', 'TEXT'),
+            ('users', 'subjects', 'TEXT'),
+            ('attendance', 'user_id', 'INTEGER'),
+            ('attendance', 'subject', 'TEXT'),
+            ('attendance', 'status', 'TEXT DEFAULT "Present"'),
+            ('attendance', 'marked_by_user_id', 'INTEGER'),
+            ('timetable', 'teacher_id', 'INTEGER')
+        ]
+        for table, column, col_type in migrations:
+            try:
+                cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}')
+            except sqlite3.OperationalError: pass
             
     conn.commit()
     conn.close()
@@ -46,26 +75,32 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Auto-increment keyword differs between SQLite and Postgres
+    SERIAL_KEY = "SERIAL PRIMARY KEY" if DB_TYPE == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
     # 1. Students Table
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             name TEXT NOT NULL,
-            ou_id TEXT UNIQUE NOT NULL,
-            edc_number TEXT UNIQUE NOT NULL,
+            ou_id TEXT,
+            edc_number TEXT,
             course TEXT NOT NULL,
             year TEXT NOT NULL,
-            outlook_email TEXT UNIQUE,
+            outlook_email TEXT,
             parent_email TEXT,
             parent_phone TEXT,
-            qr_hash TEXT
+            qr_hash TEXT,
+            UNIQUE(ou_id),
+            UNIQUE(edc_number),
+            UNIQUE(outlook_email)
         )
     ''')
     
     # 2. Student Faces Table
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS student_faces (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             student_id INTEGER NOT NULL,
             face_encoding TEXT NOT NULL,
             FOREIGN KEY (student_id) REFERENCES students (id) ON DELETE CASCADE
@@ -73,13 +108,13 @@ def init_db():
     ''')
 
     # 3. Users Table (Faculty/Admins)
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
             full_name TEXT NOT NULL,
-            role TEXT NOT NULL, -- 'Admin' or 'Teacher'
+            role TEXT NOT NULL, 
             department TEXT,
             subjects TEXT,
             face_encoding TEXT
@@ -87,9 +122,9 @@ def init_db():
     ''')
     
     # 4. Timetable Table
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS timetable (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             course TEXT NOT NULL,
             year TEXT NOT NULL,
             day_of_week TEXT NOT NULL,
@@ -102,9 +137,9 @@ def init_db():
     ''')
     
     # 5. Attendance Table
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS attendance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             student_id INTEGER,
             user_id INTEGER,
             date TEXT NOT NULL,
@@ -119,9 +154,9 @@ def init_db():
     ''')
 
     # 6. Leave Requests Table
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS leave_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             student_id INTEGER NOT NULL,
             start_date TEXT NOT NULL,
             end_date TEXT NOT NULL,
@@ -133,9 +168,9 @@ def init_db():
     ''')
 
     # 7. Announcements Table
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS announcements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             user_id INTEGER NOT NULL,
             title TEXT NOT NULL,
             content TEXT NOT NULL,
@@ -146,9 +181,9 @@ def init_db():
     ''')
 
     # 8. Error Logs Table (For AI Auto-Repair System)
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS error_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             timestamp TEXT NOT NULL,
             route TEXT,
             traceback_data TEXT NOT NULL,
@@ -158,9 +193,9 @@ def init_db():
     ''')
 
     # 9. Audit Logs Table (Enterprise Security)
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             user_id INTEGER,
             action TEXT NOT NULL,
             target_type TEXT,
@@ -171,9 +206,9 @@ def init_db():
     ''')
 
     # 10. AI Predictions Table
-    cursor.execute('''
+    cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS ai_predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {SERIAL_KEY},
             student_id INTEGER,
             prediction_type TEXT,
             risk_level TEXT,
@@ -182,8 +217,11 @@ def init_db():
         )
     ''')
 
-    # Default admin
-    cursor.execute("INSERT OR IGNORE INTO users (username, password, full_name, role) VALUES ('admin', 'admin123', 'System Administrator', 'Admin')")
+    # Default admin - Use appropriate syntax for Ignore
+    if DB_TYPE == "sqlite":
+        cursor.execute("INSERT OR IGNORE INTO users (username, password, full_name, role) VALUES ('admin', 'admin123', 'System Administrator', 'Admin')")
+    else:
+        cursor.execute("INSERT INTO users (username, password, full_name, role) VALUES ('admin', 'admin123', 'System Administrator', 'Admin') ON CONFLICT (username) DO NOTHING")
     
     conn.commit()
     conn.close()

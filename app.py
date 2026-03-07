@@ -35,7 +35,11 @@ camera_instance = None
 def get_camera():
     global camera_instance
     if camera_instance is None:
-        camera_instance = VideoCamera()
+        try:
+            camera_instance = VideoCamera()
+        except Exception as e:
+            print(f"[System] Camera Hardware Error: {e}. Running in Dashboard-only mode.")
+            return None
     return camera_instance
 
 # Login Required Decorator
@@ -587,6 +591,58 @@ def gen(camera):
         else:
             # If camera is off, don't hog CPU, wait a bit
             time.sleep(0.1)
+
+@app.route('/scanner')
+@login_required
+def web_scanner():
+    return render_template('scanner.html')
+
+@app.route('/api/cloud_scan', methods=['POST'])
+@login_required
+def cloud_scan():
+    """Universal Scanning API for any device (Mobile/Tablet/PC)"""
+    data = request.json
+    if not data or 'image' not in data:
+        return {"error": "No image data"}, 400
+    
+    # Decode base64 image from browser
+    import base64
+    try:
+        header, encoded = data['image'].split(",", 1)
+        image_bytes = base64.b64decode(encoded)
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        cam = get_camera()
+        if not cam:
+            return {"error": "AI Vision Engine offline"}, 500
+            
+        # Process the frame using our existing AI logic
+        # We temporarily inject this frame into the camera's processing logic
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = cam.face_cascade.detectMultiScale(gray, 1.1, 5)
+        
+        result = {"status": "No face detected", "match": None}
+        
+        for (x, y, w, h) in faces:
+            roi_gray = gray[y:y+h, x:x+w]
+            if cam.is_trained:
+                label, confidence = cam.recognizer.predict(roi_gray)
+                if confidence < 80:
+                    person = cam.people_mapping.get(label)
+                    if person:
+                        # Mark attendance instantly in cloud
+                        mark_attendance(person['id'], role=person['role'])
+                        result = {
+                            "status": "Success",
+                            "match": person['name'],
+                            "role": person['role'],
+                            "confidence": round(100 - confidence, 1)
+                        }
+                        break
+        return result
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 @app.route('/video_feed')
 def video_feed():
