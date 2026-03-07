@@ -9,4 +9,5 @@ reportlab
 apscheduler
 twilio
 google-generativeai
+gunicorn
 pywin32;platform_system=="Windows"

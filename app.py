@@ -597,9 +597,11 @@ def video_feed():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    # Start the AI Auto-Repair Watchdog as a background process
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    # Start the AI Auto-Repair Watchdog as a background process ONLY in local dev
+    # We check for 'VERCEL' environment variable to disable it on cloud
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' and not os.environ.get('VERCEL'):
         print("[System] Starting AI Auto-Repair Watchdog autonomously...")
         subprocess.Popen([sys.executable, "ai_watchdog.py"])
 
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # allow_unsafe_werkzeug=True is required for certain cloud environments
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
