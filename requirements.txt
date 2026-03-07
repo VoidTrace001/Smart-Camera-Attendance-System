@@ -1,7 +1,7 @@
 flask
 flask-socketio
 eventlet
-opencv-contrib-python
+opencv-python-headless
 numpy
 pyttsx3
 qrcode[pil]
