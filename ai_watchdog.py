@@ -3,14 +3,18 @@ import time
 import os
 import json
 import re
-import google.generativeai as genai
+import warnings
+
+# Silence FutureWarnings to keep logs clean
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+from google import genai
 
 # ==============================================================================
 # VERIVAULT AI - FULLY AUTONOMOUS BACKEND REPAIR SYSTEM
 # ==============================================================================
 API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyAbkKURTHZoKU1gj4nhKTEzzBhn8Uzv53Y")
-genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+client = genai.Client(api_key=API_KEY)
 
 DB_NAME = "attendance.db"
 
@@ -59,7 +63,10 @@ def analyze_and_repair(error_id, route, traceback_data):
     
     print("[AI Watchdog] Consulting Gemini for autonomous repair strategy...")
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
         # Extract JSON from response (handling potential markdown blocks)
         json_str = re.search(r'\{.*\}', response.text, re.DOTALL).group()
         repair_plan = json.loads(json_str)

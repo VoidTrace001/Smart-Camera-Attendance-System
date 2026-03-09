@@ -2,7 +2,30 @@ import os
 from datetime import datetime
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from database import get_all_students, get_student_stats, get_student_attendance_history, delete_student
+from database import get_all_students, get_student_stats, get_student_attendance_history, delete_student, mark_attendance, get_db_connection
+
+def daily_attendance_reset():
+    """Automated Daily Absentee Marking: Marks students as 'Absent' if they haven't checked in by EOD."""
+    print("[SCHEDULER] Running Daily Absentee Marking...")
+    students = get_all_students()
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    marked_count = 0
+    for s in students:
+        # Check if student already has a record for today
+        # Note: In a real system, we'd check if today is a holiday or Sunday
+        if datetime.now().weekday() < 5: # Monday to Friday only
+            cursor.execute('SELECT id FROM attendance WHERE student_id = ? AND date = ?', (s['id'], today))
+            if not cursor.fetchone():
+                # No attendance record found, mark as Absent
+                mark_attendance(s['id'], role='Student', status='Absent', override_subject="Automated EOD System")
+                marked_count += 1
+            
+    conn.close()
+    print(f"[SCHEDULER] Daily Reset complete. Marked {marked_count} students as Absent.")
 from email_service import send_attendance_email_async
 from ai_services import predict_dropout_risk
 from notification_hub import send_whatsapp_alert
@@ -91,40 +114,22 @@ def generate_warning_pdf(student_name, course, percentage, filename):
     c.save()
 
 def check_defaulters_and_warn():
-    print("[SCHEDULER] Running weekly defaulter check...")
-    students = get_all_students()
-    
-    for s in students:
-        stats = get_student_stats(s['id'])
-        
-        # Only warn if they have actually missed classes (don't warn on day 1)
-        if stats['percentage'] < 75.0 and (stats['present'] + stats['absent']) > 5:
-            print(f"Warning triggered for {s['name']} ({stats['percentage']}%)")
-            
-            pdf_filename = f"reports/Warning_{s['name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
-            generate_warning_pdf(s['name'], s['course'], stats['percentage'], pdf_filename)
-            
-            # Send Email Alert
-            if s['parent_email']:
-                from ai_services import generate_smart_parent_report
-                from email_service import send_attendance_email_async
-                
-                # Use Gemini AI to write a personalized parent report
-                student_data = {"name": s['name']}
-                ai_email_body = generate_smart_parent_report(student_data, stats)
-                
-                send_attendance_email_async(
-                    s['parent_email'], 
-                    s['name'], 
-                    "OVERALL ATTENDANCE", 
-                    f"CRITICAL WARNING (Below 75%).\n\nAI Advisor Note:\n{ai_email_body}", 
-                    "N/A"
-                )
-    print("[SCHEDULER] Check complete.")
+    print("[SCHEDULER] Triggering Enterprise Background Tasks...")
+    try:
+        from tasks import generate_weekly_department_pdf, send_bulk_warning_emails
+        generate_weekly_department_pdf.delay()
+        send_bulk_warning_emails.delay()
+        print("[SCHEDULER] Tasks successfully queued in Redis/Celery.")
+    except Exception as e:
+        print(f"[SCHEDULER ERROR] Failed to dispatch Celery tasks: {e}")
+
 
 def init_scheduler(app):
     from apscheduler.schedulers.background import BackgroundScheduler
     scheduler = BackgroundScheduler()
+    
+    # Run Daily Absentee Marking at 6 PM (18:00) on weekdays
+    scheduler.add_job(func=daily_attendance_reset, trigger="cron", day_of_week='mon-fri', hour=18, minute=0)
     
     # Run every Friday at 17:00 (5 PM)
     scheduler.add_job(func=check_defaulters_and_warn, trigger="cron", day_of_week='fri', hour=17, minute=0)

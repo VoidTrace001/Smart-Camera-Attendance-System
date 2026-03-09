@@ -31,9 +31,10 @@
         <h3 style="margin-bottom: 1.5rem;">Activity Records</h3>
         {% if report %}
         <div style="overflow-x: auto;">
-            <table>
+            <table class="datatable">
                 <thead>
                     <tr>
+                        <th>Verification</th>
                         <th>Timestamp</th>
                         <th>Subject / Event</th>
                         <th>Full Name</th>
@@ -45,6 +46,36 @@
                 <tbody>
                     {% for row in report %}
                     <tr>
+                        <td style="text-align: center; vertical-align: middle;">
+                            <div style="display: flex; gap: 0.5rem; justify-content: center;">
+                                <!-- Registered Photo -->
+                                <div style="width: 50px; height: 50px; overflow: hidden; border-radius: 5px; border: 1px solid #ddd;" title="Registered Reference">
+                                    {% if row.person_role == 'Student' %}
+                                        <img src="{{ url_for('static', filename='profiles/student_' ~ row.student_db_id ~ '.jpg') }}" 
+                                             onerror="this.src='https://ui-avatars.com/api/?name={{ row.display_name }}&background=random'"
+                                             alt="Registered" style="width: 100%; height: 100%; object-fit: cover;">
+                                    {% else %}
+                                        <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #f8f9fa; font-size: 0.6rem;">Faculty</div>
+                                    {% endif %}
+                                </div>
+                                
+                                <div style="display: flex; align-items: center; font-size: 1.2rem; color: var(--primary-color);">➞</div>
+
+                                <!-- Captured Verification Photo -->
+                                <div style="width: 50px; height: 50px; overflow: hidden; border-radius: 50%; border: 2px solid var(--success); cursor: pointer;" 
+                                     onclick="showImageModal('{{ url_for('static', filename='attendance_captures/' + row.verification_photo) }}')"
+                                     title="Live Verification Capture">
+                                    {% if row.verification_photo %}
+                                        <img src="{{ url_for('static', filename='attendance_captures/' + row.verification_photo) }}" alt="Verification" style="width: 100%; height: 100%; object-fit: cover;">
+                                    {% else %}
+                                        <div style="width: 100%; height: 100%; background: #eee; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; color: #999;">N/A</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            {% if row.verification_photo %}
+                                <div style="font-size: 0.65rem; color: var(--success); margin-top: 0.3rem; font-weight: 700;">● Verified Real</div>
+                            {% endif %}
+                        </td>
                         <td style="white-space: nowrap;">
                             <div style="font-weight: 700; color: var(--text-main);">{{ row.date }}</div>
                             <div style="font-size: 0.8rem; color: var(--text-muted);">{{ row.time_in }}</div>
@@ -82,4 +113,32 @@
         {% endif %}
     </div>
 </div>
+
+<!-- Verification Image Modal -->
+<div id="imageModal" class="modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.9); align-items: center; justify-content: center;">
+    <span style="position: absolute; top: 15px; right: 35px; color: #f1f1f1; font-size: 40px; font-weight: bold; cursor: pointer;" onclick="closeModal()">&times;</span>
+    <img id="modalImg" style="margin: auto; display: block; max-width: 80%; max-height: 80%; border: 5px solid white; border-radius: 10px;">
+    <div id="caption" style="margin: auto; display: block; width: 80%; max-width: 700px; text-align: center; color: #ccc; padding: 10px 0; height: 150px;">Verification Capture</div>
+</div>
+
+<script>
+function showImageModal(src) {
+    var modal = document.getElementById("imageModal");
+    var modalImg = document.getElementById("modalImg");
+    modal.style.display = "flex";
+    modalImg.src = src;
+}
+
+function closeModal() {
+    document.getElementById("imageModal").style.display = "none";
+}
+
+// Close on click outside
+window.onclick = function(event) {
+    var modal = document.getElementById("imageModal");
+    if (event.target == modal) {
+        closeModal();
+    }
+}
+</script>
 {% endblock %}

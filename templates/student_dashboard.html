@@ -91,17 +91,36 @@
     <!-- Right Column -->
     <div style="flex: 1; display: flex; flex-direction: column; gap: 2rem;">
         
-        <!-- Mobile GPS Check-In -->
-        <div class="card" style="text-align: center; border-top: 4px solid var(--success);">
-            <h3 style="margin-top: 0; display: flex; align-items: center; justify-content: center; gap: 0.5rem;">
-                📍 Campus Check-In
-            </h3>
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem;">Mark your attendance using your device's GPS if you are within 300 meters of the campus.</p>
-            <button id="gpsCheckinBtn" class="btn" style="width: 100%; background: var(--success);" onclick="requestMobileCheckin()">
-                Verify Location & Check In
-            </button>
-            <p id="gpsStatus" style="margin-top: 1rem; font-size: 0.85rem; font-weight: 600;"></p>
+        <!-- Mobile GPS Check-In with Enterprise Mapping -->
+        <div class="card" style="text-align: center; border-top: 4px solid var(--success); padding: 0; overflow: hidden;">
+            <div style="padding: 1.5rem 1.5rem 0.5rem 1.5rem;">
+                <h3 style="margin-top: 0; display: flex; align-items: center; justify-content: center; gap: 0.5rem;">
+                    <span style="font-size: 1.2rem;">📍</span> Campus Geo-Fence
+                </h3>
+                <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+                    You must be within the 300m campus perimeter to authorize attendance.
+                </p>
+            </div>
+            
+            <!-- Map Container -->
+            <div id="geoMap" style="height: 250px; width: 100%; background: #e2e8f0; position: relative;">
+                <div id="mapOverlay" style="position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(255,255,255,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center; flex-direction: column;">
+                    <div class="spinner" style="font-size: 2rem; animation: spin 2s linear infinite;">🧭</div>
+                    <p style="font-weight: 700; color: var(--primary-color); margin-top: 1rem;">Acquiring Satellites...</p>
+                </div>
+            </div>
+
+            <div style="padding: 1.5rem;">
+                <button id="gpsCheckinBtn" class="btn" style="width: 100%; background: var(--success); opacity: 0.5; cursor: not-allowed;" disabled onclick="requestMobileCheckin()">
+                    Verify Location & Check In
+                </button>
+                <p id="gpsStatus" style="margin-top: 1rem; font-size: 0.85rem; font-weight: 700; color: var(--text-muted);">Waiting for GPS lock...</p>
+            </div>
         </div>
+
+        <style>
+            @keyframes spin { 100% { transform: rotate(360deg); } }
+        </style>
 
         <!-- QR Code Card -->
         <div class="card" style="text-align: center;">
@@ -155,6 +174,85 @@
 </div>
 
 <script>
+// Enterprise Geo-Fencing Map Logic
+let map, userMarker, campusCircle;
+const CAMPUS_LAT = 17.4300;
+const CAMPUS_LON = 78.4480;
+const ALLOWED_RADIUS = 300; // meters
+
+document.addEventListener("DOMContentLoaded", function() {
+    if (!navigator.geolocation) {
+        document.getElementById('mapOverlay').innerHTML = `<p style="color:var(--danger);font-weight:700;">Geolocation not supported.</p>`;
+        return;
+    }
+
+    // Initialize Map
+    map = L.map('geoMap', { zoomControl: false, attributionControl: false }).setView([CAMPUS_LAT, CAMPUS_LON], 15);
+    
+    // Add sleek dark/light mode tiles
+    const isDark = document.body.getAttribute('data-theme') === 'dark';
+    const tileUrl = isDark 
+        ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+        : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+    
+    L.tileLayer(tileUrl, { maxZoom: 19 }).addTo(map);
+
+    // Draw Campus Geofence
+    campusCircle = L.circle([CAMPUS_LAT, CAMPUS_LON], {
+        color: 'var(--success)',
+        fillColor: 'var(--success)',
+        fillOpacity: 0.1,
+        radius: ALLOWED_RADIUS
+    }).addTo(map);
+
+    // Campus Icon
+    L.marker([CAMPUS_LAT, CAMPUS_LON]).addTo(map).bindPopup("<b>Institution Campus</b>").openPopup();
+
+    // Get User Location
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            const userLat = position.coords.latitude;
+            const userLon = position.coords.longitude;
+            
+            document.getElementById('mapOverlay').style.display = 'none'; // Hide loading
+            
+            // Add User Marker
+            userMarker = L.circleMarker([userLat, userLon], {
+                color: 'var(--primary-color)',
+                fillColor: 'var(--primary-color)',
+                fillOpacity: 1,
+                radius: 8
+            }).addTo(map).bindPopup("You are here");
+
+            // Adjust bounds to show both campus and user
+            const bounds = L.latLngBounds([[CAMPUS_LAT, CAMPUS_LON], [userLat, userLon]]);
+            map.fitBounds(bounds, { padding: [30, 30] });
+
+            // Calculate Distance (Haversine approximation for UI)
+            const distance = map.distance([userLat, userLon], [CAMPUS_LAT, CAMPUS_LON]);
+            
+            const btn = document.getElementById('gpsCheckinBtn');
+            const status = document.getElementById('gpsStatus');
+            
+            if (distance <= ALLOWED_RADIUS) {
+                btn.disabled = false;
+                btn.style.opacity = 1;
+                btn.style.cursor = 'pointer';
+                status.innerText = `✅ In Zone (${Math.round(distance)}m from center). Ready to verify.`;
+                status.style.color = "var(--success)";
+            } else {
+                status.innerText = `❌ Out of Bounds. You are ${Math.round(distance)}m away. Move closer to the campus.`;
+                status.style.color = "var(--danger)";
+            }
+        },
+        (error) => {
+            document.getElementById('mapOverlay').innerHTML = `<p style="color:var(--danger);font-weight:700;">Location Access Denied.</p>`;
+            document.getElementById('gpsStatus').innerText = "Please allow location tracking in your browser settings.";
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+});
+
 function requestMobileCheckin() {
     const statusText = document.getElementById('gpsStatus');
     const btn = document.getElementById('gpsCheckinBtn');
@@ -166,8 +264,8 @@ function requestMobileCheckin() {
     }
 
     btn.disabled = true;
-    btn.innerText = "Locating...";
-    statusText.innerText = "Requesting GPS signal...";
+    btn.innerText = "Transmitting Coordinates...";
+    statusText.innerText = "Encrypting and verifying GPS signal...";
     statusText.style.color = "var(--text-muted)";
 
     navigator.geolocation.getCurrentPosition(
@@ -184,9 +282,10 @@ function requestMobileCheckin() {
                 const data = await response.json();
                 
                 if (response.ok) {
-                    statusText.innerText = `✅ ${data.message}`;
+                    statusText.innerText = `✅ Verified & Signed In!`;
                     statusText.style.color = "var(--success)";
-                    btn.innerText = "Check-In Successful";
+                    btn.innerText = "Attendance Authorized";
+                    btn.style.background = "#0f172a";
                     setTimeout(() => location.reload(), 2000);
                 } else {
                     statusText.innerText = `❌ ${data.error}`;

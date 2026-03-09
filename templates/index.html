@@ -36,6 +36,36 @@
     {% endif %}
 </div>
 
+<!-- Enterprise Analytics Dashboard (Chart.js) -->
+{% if session.get('role') == 'Admin' %}
+<div style="display: flex; justify-content: flex-end; margin-bottom: 1rem;">
+    <button onclick="triggerPDFReport()" class="btn" style="background: var(--primary-color); display: flex; align-items: center; gap: 0.5rem;">
+        <span>📄</span> Generate Enterprise PDF Report
+    </button>
+</div>
+
+<div style="display: flex; gap: 2rem; margin-bottom: 2.5rem;">
+    <!-- 7-Day Trend Chart -->
+    <div class="card" style="flex: 2;">
+        <h3 style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center;">
+            Institution Attendance Trend (7 Days)
+            <span class="badge badge-primary">LIVE DATA</span>
+        </h3>
+        <div style="position: relative; height: 300px; width: 100%;">
+            <canvas id="trendChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Course Health Radar/Doughnut -->
+    <div class="card" style="flex: 1;">
+        <h3 style="margin-bottom: 1.5rem;">Departmental Health</h3>
+        <div style="position: relative; height: 300px; width: 100%;">
+            <canvas id="courseChart"></canvas>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <div style="display: flex; gap: 2rem; margin-bottom: 2.5rem;">
     <!-- Left Column: Camera and Announcements -->
     <div style="flex: 2; display: flex; flex-direction: column; gap: 2rem;">
@@ -217,8 +247,163 @@
 }
 </style>
 
+{% if session.get('role') != 'Student' %}
+<!-- Floating AI Assistant Button -->
+<div id="ai-chat-toggle" onclick="toggleAIChat()" style="position: fixed; bottom: 2rem; right: 2rem; width: 60px; height: 60px; background: var(--primary-color); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 1.5rem; cursor: pointer; box-shadow: 0 10px 25px rgba(79, 70, 229, 0.4); z-index: 9999; transition: var(--transition-all);">
+    🤖
+</div>
+
+<!-- AI Chat Window -->
+<div id="ai-chat-window" style="display: none; position: fixed; bottom: 6rem; right: 2rem; width: 380px; height: 500px; background: var(--card-bg); border-radius: var(--radius-lg); box-shadow: 0 20px 50px rgba(0,0,0,0.2); z-index: 9999; flex-direction: column; overflow: hidden; border: 1px solid var(--border-color);">
+    <div style="padding: 1.25rem; background: var(--primary-color); color: white; display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span style="font-size: 1.2rem;">🤖</span>
+            <div>
+                <div style="font-weight: 800; font-size: 0.95rem;">VeriVault AI Analyst</div>
+                <div style="font-size: 0.7rem; opacity: 0.8;">Neural Database Engine</div>
+            </div>
+        </div>
+        <button onclick="toggleAIChat()" style="background: none; border: none; color: white; cursor: pointer; font-size: 1.2rem;">&times;</button>
+    </div>
+    
+    <div id="ai-messages" style="flex: 1; padding: 1.25rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; background: var(--bg-color);">
+        <div style="background: var(--card-bg); padding: 0.75rem 1rem; border-radius: 0 12px 12px 12px; font-size: 0.9rem; align-self: flex-start; max-width: 85%; border: 1px solid var(--border-color);">
+            Hello, {{ session.get('full_name').split(' ')[0] }}! I have direct access to the institutional database. 
+            <br><br>
+            Try asking: <i>"Who is absent today?"</i> or <i>"Show me BCA students."</i>
+        </div>
+    </div>
+
+    <div style="padding: 1rem; border-top: 1px solid var(--border-color); display: flex; gap: 0.5rem; background: var(--card-bg);">
+        <input type="text" id="ai-input" placeholder="Ask your data..." style="flex: 1; padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-main); font-size: 0.9rem;" onkeypress="if(event.key === 'Enter') sendAIMessage()">
+        <button onclick="sendAIMessage()" style="width: 45px; height: 45px; background: var(--primary-color); border: none; border-radius: var(--radius-md); color: white; cursor: pointer;">➔</button>
+    </div>
+</div>
+{% endif %}
+
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
 <script>
+    {% if session.get('role') == 'Admin' %}
+    // Initialize Enterprise Charts
+    document.addEventListener("DOMContentLoaded", function() {
+        fetch('/api/analytics')
+            .then(response => response.json())
+            .then(data => {
+                const isDark = document.body.getAttribute('data-theme') === 'dark';
+                const textColor = isDark ? '#94a3b8' : '#64748b';
+                const gridColor = isDark ? '#1e293b' : '#e2e8f0';
+
+                // 1. Trend Chart (Line)
+                const trendCtx = document.getElementById('trendChart').getContext('2d');
+                
+                // Create Gradient
+                let gradient = trendCtx.createLinearGradient(0, 0, 0, 300);
+                gradient.addColorStop(0, 'rgba(79, 70, 229, 0.5)'); // Primary color
+                gradient.addColorStop(1, 'rgba(79, 70, 229, 0.0)');
+
+                new Chart(trendCtx, {
+                    type: 'line',
+                    data: {
+                        labels: data.trends.map(t => t.date),
+                        datasets: [{
+                            label: 'Present Students',
+                            data: data.trends.map(t => t.present_count),
+                            borderColor: '#4f46e5',
+                            backgroundColor: gradient,
+                            borderWidth: 3,
+                            pointBackgroundColor: '#ffffff',
+                            pointBorderColor: '#4f46e5',
+                            pointRadius: 4,
+                            fill: true,
+                            tension: 0.4 // Smooth curves
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: textColor } },
+                            x: { grid: { display: false }, ticks: { color: textColor } }
+                        }
+                    }
+                });
+
+                // 2. Department Health Chart (Doughnut)
+                const courseCtx = document.getElementById('courseChart').getContext('2d');
+                new Chart(courseCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: data.distribution.map(d => d.course),
+                        datasets: [{
+                            data: data.distribution.map(d => d.health_percentage),
+                            backgroundColor: [
+                                '#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'
+                            ],
+                            borderWidth: 0,
+                            hoverOffset: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '75%',
+                        plugins: {
+                            legend: { position: 'bottom', labels: { color: textColor, padding: 20, font: { size: 11, family: 'Inter' } } }
+                        }
+                    }
+                });
+            });
+    });
+    {% endif %}
+
+    {% if session.get('role') != 'Student' %}
+    function toggleAIChat() {
+        const win = document.getElementById('ai-chat-window');
+        win.style.display = win.style.display === 'none' ? 'flex' : 'none';
+    }
+
+    async function sendAIMessage() {
+        const input = document.getElementById('ai-input');
+        const msgContainer = document.getElementById('ai-messages');
+        const query = input.value.trim();
+        if (!query) return;
+
+        // Add user message
+        const userDiv = document.createElement('div');
+        userDiv.style = "background: var(--primary-color); color: white; padding: 0.75rem 1rem; border-radius: 12px 12px 0 12px; font-size: 0.9rem; align-self: flex-end; max-width: 85%;";
+        userDiv.innerText = query;
+        msgContainer.appendChild(userDiv);
+        input.value = "";
+        msgContainer.scrollTop = msgContainer.scrollHeight;
+
+        // Add loading state
+        const loadingDiv = document.createElement('div');
+        loadingDiv.style = "background: var(--card-bg); padding: 0.75rem 1rem; border-radius: 0 12px 12px 12px; font-size: 0.9rem; align-self: flex-start; border: 1px solid var(--border-color);";
+        loadingDiv.innerText = "Thinking...";
+        msgContainer.appendChild(loadingDiv);
+
+        try {
+            const response = await fetch('/api/ai_chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: query })
+            });
+            const data = await response.json();
+            
+            loadingDiv.innerHTML = `<div>${data.answer}</div>`;
+            if (data.sql) {
+                loadingDiv.innerHTML += `<div style="margin-top:0.5rem; font-size:0.7rem; color:var(--text-muted); font-family:monospace; background:rgba(0,0,0,0.05); padding:5px; border-radius:4px;">SQL: ${data.sql}</div>`;
+            }
+        } catch (err) {
+            loadingDiv.innerText = "Error connecting to AI Analyst.";
+        }
+        msgContainer.scrollTop = msgContainer.scrollHeight;
+    }
+    {% endif %}
+
     const socket = io();
     const logList = document.getElementById('recentLogList');
 
@@ -275,5 +460,37 @@
         showToast(`New Announcement: ${data.title}`, 'info');
         // Optionally refresh list or inject HTML
     });
+
+    {% if session.get('role') == 'Admin' %}
+    function triggerPDFReport() {
+        Swal.fire({
+            title: 'Generating Enterprise Report...',
+            text: 'Gathering institutional data and formatting PDF.',
+            allowOutsideClick: false,
+            didOpen: () => { Swal.showLoading(); }
+        });
+
+        fetch('/api/generate_report', { method: 'POST' })
+            .then(res => {
+                if (!res.ok) throw new Error("Failed to generate report");
+                return res.blob();
+            })
+            .then(blob => {
+                Swal.close();
+                // Create a download link for the PDF
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Enterprise_Report_${new Date().toISOString().slice(0,10)}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                showToast("Report generated successfully!", "success");
+            })
+            .catch(err => {
+                Swal.fire('Error', 'Failed to generate the report. Check server logs.', 'error');
+            });
+    }
+    {% endif %}
 </script>
 {% endblock %}

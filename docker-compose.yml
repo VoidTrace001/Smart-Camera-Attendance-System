@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - WERKZEUG_RUN_MAIN=true
+      - REDIS_URL=redis://redis:6379/0
+      # Pass through your local .env if you have one, or set explicitly here
+    env_file:
+      - .env
+    volumes:
+      - ./attendance.db:/app/attendance.db
+      - ./reports:/app/reports
+      - ./static/attendance_captures:/app/static/attendance_captures
+      - ./static/profiles:/app/static/profiles
+    depends_on:
+      - redis
+    restart: always
+
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+    restart: always
+
+  celery_worker:
+    build: .
+    command: celery -A tasks.celery_app worker --loglevel=info
+    volumes:
+      - ./attendance.db:/app/attendance.db
+      - ./reports:/app/reports
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - web
+    restart: always

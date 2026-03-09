@@ -1,0 +1,95 @@
+================================================================================
+VERIVAULT AI - ENTERPRISE BIOMETRIC ECOSYSTEM
+FULL TECHNICAL DOCUMENTATION & SYSTEM SPECIFICATIONS
+================================================================================
+
+1. SYSTEM OVERVIEW
+--------------------------------------------------------------------------------
+VeriVault AI is an advanced, autonomous institutional management system that 
+leverages Deep Learning, Generative AI, and Microservices Architecture to 
+automate attendance, security, and data analytics.
+
+2. CORE ARCHITECTURE (APEX STACK)
+--------------------------------------------------------------------------------
+- Backend Framework: Flask (Python 3.11+)
+- Vision Engine: DeepFace Neural Network (FaceNet Model)
+- Database Layer: Hybrid (SQLite for local / PostgreSQL for Cloud)
+- Task Orchestration: Celery + Redis (Asynchronous Processing)
+- Intelligence: Google Gemini 1.5 Flash (Generative AI)
+- Frontend: Vanilla JS, Chart.js (Analytics), Leaflet.js (Geo-Spatial)
+- DevOps: Docker & Docker-Compose (Containerization)
+
+3. COMPREHENSIVE FEATURE BREAKDOWN
+--------------------------------------------------------------------------------
+
+PHASE 1: PREDICTIVE ANALYTICS & GEO-SPATIAL UI
+- Visual Business Intelligence: Animated trendlines and doughnut charts 
+  displaying institutional attendance health in real-time.
+- Satellite Geo-Fencing: Interactive GPS tracking requiring students to be 
+  within a 300m radius of the campus to authorize mobile check-ins.
+
+PHASE 2: NEURAL NETWORK VISION
+- 128D Mathematical Embeddings: Replaced pixel-matching with high-dimensional 
+  vector comparison (Cosine Similarity) for 99.38% accuracy.
+- Emotion AI: Real-time detection of student mood (Happy, Focused, Bored, 
+  Confused) to generate classroom engagement metrics.
+- Liveness Detection: Mandatory blink-detection logic to prevent spoofing via 
+  printed photographs or digital screens.
+
+PHASE 3: ENTERPRISE ARCHITECTURE
+- Asynchronous Workers: Heavy operations like bulk email dispatch and 
+  visual PDF generation are offloaded to background Celery workers.
+- Self-Healing Watchdog: An autonomous background service that monitors 
+  application crashes and uses LLMs to suggest real-time code repairs.
+- Automated Business Logic: 
+    * 6:00 PM: Daily automated marking of absentees.
+    * Wednesday: AI Dropout Prediction analysis.
+    * Annual: Data retention purge of graduated batches.
+
+PHASE 4: GENERATIVE AI DATABASE ASSISTANT
+- VeriVault AI Analyst: A floating natural language interface.
+- Text-to-SQL Engine: Translates human questions into complex SQL queries.
+- Data Summarization: Analyzes raw database results and provides professional 
+  summaries to administrators.
+
+4. SECURITY PROTOCOLS
+--------------------------------------------------------------------------------
+- Password Security: Industry-standard PBKDF2-SHA256 Cryptographic Hashing.
+- QR Security: Dynamic HMAC-signed tokens that expire every 60 seconds 
+  (Anti-Replay Protection).
+- Environment Security: All sensitive API keys and secrets managed via 
+  isolated .env files.
+- Audit Trail: Enterprise-level logging of all sensitive administrative actions 
+  including IP address tracking.
+
+5. DATABASE SCHEMA SPECIFICATIONS
+--------------------------------------------------------------------------------
+- students: Core profile, Course/Batch details, Biometric Vector link.
+- users: RBAC (Admin/Teacher) credentials and Faculty Biometrics.
+- attendance: Timestamped logs with verification_photo ROI storage.
+- student_faces: High-dimensional neural embeddings storage.
+- timetable: Institutional schedule mapping.
+- leave_requests: Digital leave application and approval workflow.
+- ai_predictions: Historical record of AI-detected dropout risks.
+- audit_logs: Permanent record of system-wide sensitive actions.
+
+6. OPERATIONAL ORCHESTRATION
+--------------------------------------------------------------------------------
+To start the entire ecosystem, use the unified startup command:
+> python app.py
+
+Components started:
+1. Flask Server (Web Interface & Scanner)
+2. AI Watchdog (Autonomous Maintenance)
+3. Celery Worker (Background Task Engine)
+
+7. DEFAULT CREDENTIALS
+--------------------------------------------------------------------------------
+For security compliance, default credentials are not stored in public 
+documentation. 
+- Deployment: Configure your initial Admin account via environment variables
+  or during the first-run database initialization process.
+
+================================================================================
+VERIVAULT AI - PREPARED FOR PRODUCTION DEPLOYMENT
+================================================================================

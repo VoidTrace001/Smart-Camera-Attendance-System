@@ -45,6 +45,26 @@ const matchInfo = document.getElementById('matchInfo');
 const matchName = document.getElementById('matchName');
 
 async function startScanner() {
+    // Enterprise Security Check: getUserMedia requires HTTPS or localhost
+    if (!window.isSecureContext && window.location.hostname !== "localhost") {
+        Swal.fire({
+            icon: 'error',
+            title: 'Security Restriction',
+            text: 'Camera access is blocked by your browser because this site is not running over a secure connection (HTTPS). Please use http://localhost:5000 or configure an SSL certificate.',
+            confirmButtonColor: 'var(--primary-color)'
+        });
+        return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        Swal.fire({
+            icon: 'warning',
+            title: 'Browser Incompatible',
+            text: 'Your browser does not support camera access or has blocked it. Try using Chrome or Firefox on localhost.',
+        });
+        return;
+    }
+
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ 
             video: { facingMode: "user" }, 

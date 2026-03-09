@@ -4,7 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VeriVault AI - Smart Attendance</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    <meta name="theme-color" content="#4f46e5">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Enterprise Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    
+    <!-- Geo-Spatial Mapping -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
     <style>
         :root {
             /* Light Theme Variables */
@@ -503,30 +518,43 @@
         document.body.setAttribute('data-theme', savedTheme);
         document.getElementById('themeIcon').innerText = savedTheme === 'dark' ? '🌙' : '☀️';
 
-        function showToast(message, type = 'info') {
-            const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = `toast`;
-            if (type === 'success') toast.style.borderLeftColor = 'var(--success)';
-            if (type === 'error') toast.style.borderLeftColor = 'var(--danger)';
-            
-            toast.innerHTML = `
-                <div style="font-size: 1.5rem;">${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</div>
-                <div style="font-weight: 600;">${message}</div>
-            `;
-            
-            container.appendChild(toast);
-            setTimeout(() => {
-                toast.classList.add('fade-out');
-                setTimeout(() => toast.remove(), 500);
-            }, 4500);
-        }
-
         window.addEventListener('DOMContentLoaded', () => {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {
-                const type = alert.classList.contains('alert-success') ? 'success' : 'error';
-                showToast(alert.innerText, type);
+                const isSuccess = alert.classList.contains('alert-success');
+                Swal.fire({
+                    toast: true,
+                    position: 'top-end',
+                    icon: isSuccess ? 'success' : 'error',
+                    title: alert.innerText,
+                    showConfirmButton: false,
+                    timer: 4500,
+                    timerProgressBar: true,
+                    background: savedTheme === 'dark' ? '#1e293b' : '#ffffff',
+                    color: savedTheme === 'dark' ? '#f8fafc' : '#0f172a'
+                });
+            });
+
+            // Initialize Enterprise DataTables automatically
+            $(document).ready(function() {
+                $('table.datatable').DataTable({
+                    pageLength: 15,
+                    responsive: true,
+                    language: {
+                        search: "🔍 Quick Find:",
+                        lengthMenu: "Show _MENU_ entries"
+                    },
+                    initComplete: function() {
+                        $('.dataTables_wrapper').css('padding', '1rem');
+                        $('.dataTables_filter input').css({
+                            'border-radius': '8px',
+                            'padding': '0.5rem',
+                            'border': '1px solid var(--border-color)',
+                            'background': 'var(--card-bg)',
+                            'color': 'var(--text-main)'
+                        });
+                    }
+                });
             });
         });
     </script>

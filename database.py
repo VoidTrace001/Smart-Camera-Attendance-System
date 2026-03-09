@@ -1,7 +1,10 @@
 import sqlite3
 import os
+import cv2
+import numpy as np
 from datetime import datetime
 import hashlib
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # Use SQLite locally, but allow PostgreSQL (Supabase) in production
 DB_TYPE = "postgres" if os.environ.get('DATABASE_URL') else "sqlite"
@@ -31,12 +34,13 @@ def migrate_db():
             "students": [
                 ('course', 'TEXT'), ('year', 'TEXT'), ('outlook_email', 'TEXT'),
                 ('parent_email', 'TEXT'), ('parent_phone', 'TEXT'), ('qr_hash', 'TEXT'),
-                ('ou_id', 'TEXT'), ('edc_number', 'TEXT')
+                ('ou_id', 'TEXT'), ('edc_number', 'TEXT'), ('face_embedding', 'TEXT')
             ],
-            "users": [('face_encoding', 'TEXT'), ('subjects', 'TEXT')],
+            "users": [('face_encoding', 'TEXT'), ('subjects', 'TEXT'), ('face_embedding', 'TEXT')],
             "attendance": [
                 ('user_id', 'INTEGER'), ('subject', 'TEXT'), 
-                ('status', 'TEXT DEFAULT \'Present\''), ('marked_by_user_id', 'INTEGER')
+                ('status', 'TEXT DEFAULT \'Present\''), ('marked_by_user_id', 'INTEGER'),
+                ('verification_photo', 'TEXT')
             ],
             "timetable": [('teacher_id', 'INTEGER')]
         }
@@ -56,12 +60,15 @@ def migrate_db():
             ('students', 'qr_hash', 'TEXT'),
             ('students', 'ou_id', 'TEXT'),
             ('students', 'edc_number', 'TEXT'),
+            ('students', 'face_embedding', 'TEXT'),
             ('users', 'face_encoding', 'TEXT'),
             ('users', 'subjects', 'TEXT'),
+            ('users', 'face_embedding', 'TEXT'),
             ('attendance', 'user_id', 'INTEGER'),
             ('attendance', 'subject', 'TEXT'),
             ('attendance', 'status', 'TEXT DEFAULT "Present"'),
             ('attendance', 'marked_by_user_id', 'INTEGER'),
+            ('attendance', 'verification_photo', 'TEXT'),
             ('timetable', 'teacher_id', 'INTEGER')
         ]
         for table, column, col_type in migrations:
@@ -104,6 +111,7 @@ def init_db():
             id {SERIAL_KEY},
             student_id INTEGER NOT NULL,
             face_encoding TEXT NOT NULL,
+            face_embedding TEXT,
             FOREIGN KEY (student_id) REFERENCES students (id) ON DELETE CASCADE
         )
     ''')
@@ -118,7 +126,8 @@ def init_db():
             role TEXT NOT NULL, 
             department TEXT,
             subjects TEXT,
-            face_encoding TEXT
+            face_encoding TEXT,
+            face_embedding TEXT
         )
     ''')
     
@@ -148,6 +157,7 @@ def init_db():
             subject TEXT,
             status TEXT DEFAULT 'Present',
             marked_by_user_id INTEGER,
+            verification_photo TEXT,
             FOREIGN KEY (student_id) REFERENCES students (id) ON DELETE CASCADE,
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
             FOREIGN KEY (marked_by_user_id) REFERENCES users (id)
@@ -218,11 +228,16 @@ def init_db():
         )
     ''')
 
-    # Default admin - Use appropriate syntax for Ignore
+    # Default admin - Use environment variables for security
+    admin_user = os.environ.get('INITIAL_ADMIN_USER', 'admin')
+    admin_pass = os.environ.get('INITIAL_ADMIN_PASS', 'admin123')
+    
+    admin_password_hashed = generate_password_hash(admin_pass)
+    
     if DB_TYPE == "sqlite":
-        cursor.execute("INSERT OR IGNORE INTO users (username, password, full_name, role) VALUES ('admin', 'admin123', 'System Administrator', 'Admin')")
+        cursor.execute("INSERT OR IGNORE INTO users (username, password, full_name, role) VALUES (?, ?, 'System Administrator', 'Admin')", (admin_user, admin_password_hashed))
     else:
-        cursor.execute("INSERT INTO users (username, password, full_name, role) VALUES ('admin', 'admin123', 'System Administrator', 'Admin') ON CONFLICT (username) DO NOTHING")
+        cursor.execute("INSERT INTO users (username, password, full_name, role) VALUES (?, ?, 'System Administrator', 'Admin') ON CONFLICT (username) DO NOTHING", (admin_user, admin_password_hashed))
     
     conn.commit()
     conn.close()
@@ -230,11 +245,12 @@ def init_db():
 # --- User/Auth Functions ---
 def check_login(username, password):
     conn = get_db_connection()
-    user = conn.execute('SELECT * FROM users WHERE username = ? AND password = ?', (username, password)).fetchone()
-    if user:
+    user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
+    if user and check_password_hash(user['password'], password):
         conn.close()
         return {'id': user['id'], 'username': user['username'], 'role': user['role'], 'full_name': user['full_name']}
     
+    # Students use plain text EDC number as password for now (can be upgraded later)
     student = conn.execute('SELECT * FROM students WHERE outlook_email = ? AND edc_number = ?', (username, password)).fetchone()
     if student:
         conn.close()
@@ -245,9 +261,10 @@ def check_login(username, password):
 
 def add_teacher(username, password, full_name, department, subjects=None):
     conn = get_db_connection()
+    hashed_password = generate_password_hash(password)
     try:
         conn.execute('INSERT INTO users (username, password, full_name, role, department, subjects) VALUES (?, ?, ?, ?, ?, ?)',
-                     (username, password, full_name, 'Teacher', department, subjects))
+                     (username, hashed_password, full_name, 'Teacher', department, subjects))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -276,13 +293,15 @@ def get_user_by_id(user_id):
 def update_user(user_id, full_name, username, password=None, subjects=None):
     conn = get_db_connection()
     if password:
+        hashed_password = generate_password_hash(password)
         conn.execute('UPDATE users SET full_name = ?, username = ?, password = ?, subjects = ? WHERE id = ?',
-                     (full_name, username, password, subjects, user_id))
+                     (full_name, username, hashed_password, subjects, user_id))
     else:
         conn.execute('UPDATE users SET full_name = ?, username = ? , subjects = ? WHERE id = ?',
                      (full_name, username, subjects, user_id))
     conn.commit()
     conn.close()
+
 
 # --- Student Functions ---
 def add_student(name, ou_id, edc_number, course, year, outlook_email=None, parent_email=None, parent_phone=None):
@@ -304,22 +323,22 @@ def add_student(name, ou_id, edc_number, course, year, outlook_email=None, paren
     finally:
         conn.close()
 
-def add_student_face(student_id, face_encoding_json):
+def add_student_face(student_id, face_encoding_json, face_embedding_json=None):
     conn = get_db_connection()
-    conn.execute('INSERT INTO student_faces (student_id, face_encoding) VALUES (?, ?)', (student_id, face_encoding_json))
+    conn.execute('INSERT INTO student_faces (student_id, face_encoding, face_embedding) VALUES (?, ?, ?)', (student_id, face_encoding_json, face_embedding_json))
     conn.commit()
     conn.close()
 
-def add_faculty_face(user_id, face_encoding_json):
+def add_faculty_face(user_id, face_encoding_json, face_embedding_json=None):
     conn = get_db_connection()
-    conn.execute('UPDATE users SET face_encoding = ? WHERE id = ?', (face_encoding_json, user_id))
+    conn.execute('UPDATE users SET face_encoding = ?, face_embedding = ? WHERE id = ?', (face_encoding_json, face_embedding_json, user_id))
     conn.commit()
     conn.close()
 
 def get_all_people_with_faces():
     conn = get_db_connection()
-    students = conn.execute('SELECT s.id, s.name, f.face_encoding FROM students s JOIN student_faces f ON s.id = f.student_id').fetchall()
-    faculty = conn.execute('SELECT id, full_name as name, face_encoding, role FROM users WHERE face_encoding IS NOT NULL').fetchall()
+    students = conn.execute('SELECT s.id, s.name, f.face_encoding, f.face_embedding FROM students s JOIN student_faces f ON s.id = f.student_id').fetchall()
+    faculty = conn.execute('SELECT id, full_name as name, face_encoding, face_embedding, role FROM users WHERE face_encoding IS NOT NULL').fetchall()
     conn.close()
     
     people = []
@@ -327,16 +346,30 @@ def get_all_people_with_faces():
     label_counter = 1
     
     for r in students:
-        people.append({'label': label_counter, 'face_encoding': r['face_encoding']})
+        people.append({'label': label_counter, 'face_encoding': r['face_encoding'], 'face_embedding': r['face_embedding']})
         mapping[label_counter] = {'id': r['id'], 'name': r['name'], 'role': 'Student'}
         label_counter += 1
         
     for r in faculty:
-        people.append({'label': label_counter, 'face_encoding': r['face_encoding']})
+        people.append({'label': label_counter, 'face_encoding': r['face_encoding'], 'face_embedding': r['face_embedding']})
         mapping[label_counter] = {'id': r['id'], 'name': r['name'], 'role': r['role']}
         label_counter += 1
         
     return people, mapping
+
+def get_all_people_with_embeddings():
+    """Returns all users and students who have neural embeddings registered."""
+    conn = get_db_connection()
+    students = conn.execute('SELECT s.id, s.name, sf.face_embedding FROM students s JOIN student_faces sf ON s.id = sf.student_id WHERE sf.face_embedding IS NOT NULL').fetchall()
+    faculty = conn.execute('SELECT id, full_name as name, face_embedding, role FROM users WHERE face_embedding IS NOT NULL').fetchall()
+    conn.close()
+    
+    people = []
+    for s in students:
+        people.append({'id': s['id'], 'name': s['name'], 'role': 'Student', 'embedding': json.loads(s['face_embedding']) if s['face_embedding'] else None})
+    for f in faculty:
+        people.append({'id': f['id'], 'name': f['name'], 'role': f['role'], 'embedding': json.loads(f['face_embedding']) if f['face_embedding'] else None})
+    return [p for p in people if p['embedding'] is not None]
 
 def get_all_students():
     conn = get_db_connection()
@@ -358,7 +391,7 @@ def get_student_by_qr(qr_hash):
     return student
 
 # --- Attendance Functions ---
-def mark_attendance(person_id, role='Student', status='Present', override_date=None, override_subject=None):
+def mark_attendance(person_id, role='Student', status='Present', override_date=None, override_subject=None, captured_face=None):
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.now()
@@ -368,6 +401,21 @@ def mark_attendance(person_id, role='Student', status='Present', override_date=N
     subject = "Faculty Duty" if role != 'Student' else "Unknown"
     teacher_id = None
     
+    # Save verification photo if provided
+    verification_photo_path = None
+    if captured_face is not None:
+        try:
+            folder = os.path.join('static', 'attendance_captures')
+            if not os.path.exists(folder):
+                os.makedirs(folder)
+            
+            filename = f"verify_{role}_{person_id}_{date_str}_{now.strftime('%H%M%S')}.jpg"
+            full_path = os.path.join(folder, filename)
+            cv2.imwrite(full_path, captured_face)
+            verification_photo_path = filename # Store relative path for web access
+        except Exception as e:
+            print(f"Error saving verification photo: {e}")
+
     if role == 'Student':
         if override_subject:
             subject = override_subject
@@ -388,7 +436,7 @@ def mark_attendance(person_id, role='Student', status='Present', override_date=N
     existing = cursor.fetchone()
     if existing:
         if override_date or override_subject:
-            cursor.execute('UPDATE attendance SET status = ? WHERE id = ?', (status, existing['id']))
+            cursor.execute('UPDATE attendance SET status = ?, verification_photo = ? WHERE id = ?', (status, verification_photo_path, existing['id']))
             conn.commit()
             conn.close()
             return True
@@ -396,11 +444,11 @@ def mark_attendance(person_id, role='Student', status='Present', override_date=N
         return False
         
     if role == 'Student':
-        cursor.execute('INSERT INTO attendance (student_id, date, time_in, subject, marked_by_user_id, status) VALUES (?, ?, ?, ?, ?, ?)',
-                       (person_id, date_str, time_str, subject, teacher_id, status))
+        cursor.execute('INSERT INTO attendance (student_id, date, time_in, subject, marked_by_user_id, status, verification_photo) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                       (person_id, date_str, time_str, subject, teacher_id, status, verification_photo_path))
     else:
-        cursor.execute('INSERT INTO attendance (user_id, date, time_in, subject, status) VALUES (?, ?, ?, ?, ?)',
-                       (person_id, date_str, time_str, "Faculty Attendance", status))
+        cursor.execute('INSERT INTO attendance (user_id, date, time_in, subject, status, verification_photo) VALUES (?, ?, ?, ?, ?, ?)',
+                       (person_id, date_str, time_str, "Faculty Attendance", status, verification_photo_path))
                        
     conn.commit()
     
@@ -438,8 +486,9 @@ def get_attendance_report(date_filter=None):
     conn = get_db_connection()
     query = '''
         SELECT COALESCE(s.name, u.full_name) as display_name, 
+               s.id as student_db_id, u.id as user_db_id,
                s.course, s.year, s.outlook_email, s.parent_email,
-               a.date, a.time_in, a.subject, a.status,
+               a.date, a.time_in, a.subject, a.status, a.verification_photo,
                CASE WHEN s.id IS NOT NULL THEN 'Student' ELSE u.role END as person_role
         FROM attendance a
         LEFT JOIN students s ON a.student_id = s.id
@@ -551,6 +600,48 @@ def get_student_attendance_history(student_id):
     res = conn.execute('SELECT * FROM attendance WHERE student_id = ? ORDER BY date DESC LIMIT 10', (student_id,)).fetchall()
     conn.close()
     return res
+
+# --- Enterprise Analytics Functions ---
+def get_attendance_trends(days=7):
+    """Aggregates attendance data for the past N days for Chart.js trendlines."""
+    conn = get_db_connection()
+    # Using a simple approach compatible with both SQLite and Postgres
+    query = '''
+        SELECT date, 
+               SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) as present_count,
+               SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) as absent_count,
+               SUM(CASE WHEN status = 'On Leave' THEN 1 ELSE 0 END) as leave_count
+        FROM attendance
+        WHERE date >= date('now', ?)
+        GROUP BY date
+        ORDER BY date ASC
+    '''
+    res = conn.execute(query, (f'-{days} days',)).fetchall()
+    conn.close()
+    return [dict(row) for row in res]
+
+def get_course_distribution():
+    """Calculates attendance health per course for Chart.js Radar/Doughnut charts."""
+    conn = get_db_connection()
+    query = '''
+        SELECT s.course, 
+               COUNT(a.id) as total_records,
+               SUM(CASE WHEN a.status = 'Present' THEN 1 ELSE 0 END) as present_records
+        FROM students s
+        LEFT JOIN attendance a ON s.id = a.student_id
+        GROUP BY s.course
+    '''
+    res = conn.execute(query).fetchall()
+    conn.close()
+    
+    distribution = []
+    for row in res:
+        health = (row['present_records'] / row['total_records'] * 100) if row['total_records'] > 0 else 0
+        distribution.append({
+            'course': row['course'],
+            'health_percentage': round(health, 1)
+        })
+    return distribution
 
 # --- Timetable ---
 def add_timetable_entry(course, year, day, start, end, subject, teacher_id=None):

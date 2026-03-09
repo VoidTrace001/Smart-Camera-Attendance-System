@@ -1,4 +1,15 @@
 from flask import Flask, render_template, request, redirect, url_for, Response, flash, make_response, session, send_file
+import os
+# Silence TensorFlow and oneDNN logs
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+import logging
+logging.getLogger('tensorflow').setLevel(logging.FATAL)
+
+import warnings
+# Silence FutureWarnings to keep logs clean
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 from flask_socketio import SocketIO, emit
 import cv2
 import numpy as np
@@ -10,16 +21,46 @@ import qrcode
 import time
 import subprocess
 import sys
+import logging
+from logging.handlers import RotatingFileHandler
 from io import BytesIO
 from datetime import datetime, timedelta
 from functools import wraps
-from database import init_db, migrate_db, add_student, add_student_face, get_attendance_report, get_all_students, delete_student, add_timetable_entry, get_timetable_entries, delete_timetable_entry, check_login, get_stats, get_recent_attendance, add_teacher, get_all_teachers, delete_user, apply_leave, get_student_leaves, get_all_leave_requests, update_leave_status, get_student_stats, get_student_attendance_history, mark_attendance, add_announcement, get_announcements, get_db_connection, add_faculty_face, get_user_by_id, update_user, log_audit_trail
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# --- Enterprise Logging Configuration ---
+# Logs will be saved to both console and a rotating file
+log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log_file = 'verivault_enterprise.log'
+
+# Rotating file handler (5MB per file, keep 3 backups)
+file_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3)
+file_handler.setFormatter(log_formatter)
+file_handler.setLevel(logging.INFO)
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+console_handler.setLevel(logging.INFO)
+
+# Setup logger
+logger = logging.getLogger('VeriVaultAI')
+logger.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+from database import init_db, migrate_db, add_student, add_student_face, get_attendance_report, get_all_students, delete_student, add_timetable_entry, get_timetable_entries, delete_timetable_entry, check_login, get_stats, get_recent_attendance, add_teacher, get_all_teachers, delete_user, apply_leave, get_student_leaves, get_all_leave_requests, update_leave_status, get_student_stats, get_student_attendance_history, mark_attendance, add_announcement, get_announcements, get_db_connection, add_faculty_face, get_user_by_id, update_user, log_audit_trail, get_attendance_trends, get_course_distribution
+from ai_services import ask_database_ai, verify_ai_connectivity
+from deepface import DeepFace
 from camera import VideoCamera
 from scheduler import init_scheduler
 from id_generator import generate_id_card
 
 app = Flask(__name__)
-app.secret_key = 'super_secret_key_for_demo_purposes'
+app.secret_key = os.environ.get('SECRET_KEY', 'default_fallback_secret_key_change_in_production')
 socketio = SocketIO(app, async_mode='threading')
 
 # Initialize and Migrate Database
@@ -36,9 +77,9 @@ def get_camera():
     global camera_instance
     if camera_instance is None:
         try:
-            camera_instance = VideoCamera()
+            camera_instance = VideoCamera(secret_key=app.secret_key)
         except Exception as e:
-            print(f"[System] Camera Hardware Error: {e}. Running in Dashboard-only mode.")
+            logger.error(f"Camera Hardware Error: {e}. Dashboard-only mode.")
             return None
     return camera_instance
 
@@ -78,12 +119,13 @@ def handle_exception(e):
     tb = traceback.format_exc()
     route = request.path
     
-    # Log to the database for the AI watchdog
+    # Log to the database and enterprise logger
+    logger.critical(f"CRITICAL SYSTEM FAILURE on {route}\n{tb}")
     try:
         log_error_to_db(route, tb)
-        print(f"CRITICAL ERROR CAUGHT: Logged for AI Auto-Repair on route {route}")
+        logger.info(f"AI Watchdog notified for error repair on {route}")
     except Exception as log_e:
-        print(f"Failed to log error to DB: {log_e}")
+        logger.error(f"Failed to log error to DB: {log_e}")
         
     # Return a generic 500 response to the user
     return "A critical system error occurred. The AI Auto-Repair watchdog has been notified and is analyzing the code.", 500
@@ -147,6 +189,16 @@ def index():
     announcements = get_announcements(limit=3)
     return render_template('index.html', stats=stats, recent=recent, announcements=announcements)
 
+@app.route('/api/analytics')
+@login_required
+def api_analytics():
+    if session.get('role') == 'Student':
+        return {"error": "Unauthorized"}, 403
+    
+    trends = get_attendance_trends(7)
+    distribution = get_course_distribution()
+    return {"trends": trends, "distribution": distribution}
+
 @app.route('/student_dashboard')
 @login_required
 def student_dashboard():
@@ -180,6 +232,9 @@ def post_announcement():
     flash('Announcement published successfully!', 'success')
     return redirect(url_for('index'))
 
+import hmac
+import hashlib
+
 @app.route('/student/qr')
 @login_required
 def get_student_qr():
@@ -192,8 +247,22 @@ def get_student_qr():
     conn.close()
     
     if student and student['qr_hash']:
+        # Enterprise-Grade Dynamic Token (Expiring every 60 seconds)
+        # Prevents "QR Photo Spoofing"
+        timestamp = int(time.time() / 60) # Change token every minute
+        raw_data = f"{student['qr_hash']}:{timestamp}"
+        
+        # Sign the token using the app's secret key
+        signature = hmac.new(
+            app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key,
+            raw_data.encode(),
+            hashlib.sha256
+        ).hexdigest()[:16]
+        
+        dynamic_token = f"{student['qr_hash']}:{timestamp}:{signature}"
+        
         qr = qrcode.QRCode(version=1, box_size=10, border=5)
-        qr.add_data(student['qr_hash'])
+        qr.add_data(dynamic_token)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
         
@@ -201,6 +270,7 @@ def get_student_qr():
         img.save(img_io, 'PNG')
         img_io.seek(0)
         
+        logger.info(f"Dynamic QR Token generated for student {student_id}")
         return Response(img_io.getvalue(), mimetype='image/png')
     
     return "QR Code not found", 404
@@ -304,21 +374,32 @@ def register():
             if len(faces) > 0:
                 (x, y, w, h) = faces[0]
                 roi_gray = gray[y:y+h, x:x+w]
+                roi_color = img[y:y+h, x:x+w]
                 roi_gray = cv2.resize(roi_gray, (200, 200))
-                
+
                 face_data_json = json.dumps(roi_gray.tolist())
-                add_student_face(student_id, face_data_json)
+
+                # Neural Embedding Generation
+                try:
+                    embedding = DeepFace.represent(img_path=roi_color, model_name="Facenet", enforce_detection=False)[0]["embedding"]
+                    embedding_json = json.dumps(embedding)
+                except Exception as e:
+                    logger.error(f"DeepFace Embedding Error: {e}")
+                    embedding_json = None
+
+                add_student_face(student_id, face_data_json, embedding_json)
                 flash(f'Student registered successfully to {course} - {year}!', 'success')
             else:
+
                 flash('Student added, but NO face detected in the photo. Attendance might not work.', 'error')
         except Exception as e:
             flash(f'An error occurred during photo processing: {str(e)}', 'error')
 
-        # Reload camera training
+        # Reload camera neural embeddings
         if camera_instance:
-            camera_instance.load_and_train()
+            camera_instance.load_embeddings()
         else:
-            get_camera().load_and_train()
+            get_camera().load_embeddings()
 
         return redirect(url_for('register'))
             
@@ -415,12 +496,22 @@ def register_face():
             if len(faces) > 0:
                 (x, y, w, h) = faces[0]
                 roi_gray = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
+                roi_color = img[y:y+h, x:x+w]
                 face_data_json = json.dumps(roi_gray.tolist())
-                
-                add_faculty_face(session.get('user_id'), face_data_json)
-                
-                if camera_instance: camera_instance.load_and_train()
+
+                # Neural Embedding Generation
+                try:
+                    embedding = DeepFace.represent(img_path=roi_color, model_name="Facenet", enforce_detection=False)[0]["embedding"]
+                    embedding_json = json.dumps(embedding)
+                except Exception as e:
+                    logger.error(f"DeepFace Embedding Error: {e}")
+                    embedding_json = None
+
+                add_faculty_face(session.get('user_id'), face_data_json, embedding_json)
+
+                if camera_instance: camera_instance.load_embeddings()
                 flash('Your face has been registered for attendance!', 'success')
+
             else:
                 flash('No face detected. Please try a clearer photo.', 'error')
         except Exception as e:
@@ -523,9 +614,9 @@ def delete_student_route(id):
     delete_student(id)
     flash('Student deleted successfully.', 'success')
     if camera_instance:
-        camera_instance.load_and_train()
+        camera_instance.load_embeddings()
     else:
-        get_camera().load_and_train()
+        get_camera().load_embeddings()
         
     return redirect(url_for('manage_students'))
 
@@ -567,6 +658,32 @@ def delete_account():
     session.clear()
     flash('Your account has been permanently removed.', 'success')
     return redirect(url_for('login'))
+
+@app.route('/api/ai_chat', methods=['POST'])
+@login_required
+def api_ai_chat():
+    if session.get('role') == 'Student':
+        return {"error": "Unauthorized"}, 403
+        
+    user_query = request.json.get('query')
+    if not user_query:
+        return {"error": "No query provided"}, 400
+        
+    result = ask_database_ai(user_query)
+    return result
+
+@app.route('/api/generate_report', methods=['POST'])
+@admin_required
+def api_generate_report():
+    try:
+        from tasks import generate_weekly_department_pdf
+        # Since we want to return the PDF immediately to the user clicking the button,
+        # we'll execute it synchronously here instead of .delay()
+        pdf_path = generate_weekly_department_pdf()
+        return send_file(pdf_path, as_attachment=True, download_name=f"Enterprise_Report_{datetime.now().strftime('%Y%m%d')}.pdf")
+    except Exception as e:
+        logger.error(f"Failed to generate report: {e}")
+        return {"error": "Generation failed"}, 500
 
 @app.route('/api/camera/start')
 @login_required
@@ -625,21 +742,20 @@ def cloud_scan():
         result = {"status": "No face detected", "match": None}
         
         for (x, y, w, h) in faces:
-            roi_gray = gray[y:y+h, x:x+w]
-            if cam.is_trained:
-                label, confidence = cam.recognizer.predict(roi_gray)
-                if confidence < 80:
-                    person = cam.people_mapping.get(label)
-                    if person:
-                        # Mark attendance instantly in cloud
-                        mark_attendance(person['id'], role=person['role'])
-                        result = {
-                            "status": "Success",
-                            "match": person['name'],
-                            "role": person['role'],
-                            "confidence": round(100 - confidence, 1)
-                        }
-                        break
+            roi_color = frame[y:y+h, x:x+w]
+            
+            # Neural Recognition using our unified camera logic
+            person, dist = cam.recognize_face(roi_color)
+            if person:
+                # Mark attendance instantly in cloud with verification photo
+                mark_attendance(person['id'], role=person['role'], captured_face=roi_color)
+                result = {
+                    "status": "Success",
+                    "match": person['name'],
+                    "role": person['role'],
+                    "confidence": round((1.0 - dist) * 100, 1)
+                }
+                break
         return result
     except Exception as e:
         return {"error": str(e)}, 500
@@ -652,12 +768,40 @@ def video_feed():
     return Response(gen(cam),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
-if __name__ == '__main__':
-    # Start the AI Auto-Repair Watchdog as a background process ONLY in local dev
-    # We check for 'VERCEL' environment variable to disable it on cloud
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' and not os.environ.get('VERCEL'):
-        print("[System] Starting AI Auto-Repair Watchdog autonomously...")
-        subprocess.Popen([sys.executable, "ai_watchdog.py"])
+def is_redis_running():
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1)
+        s.connect(("localhost", 6379))
+        s.close()
+        return True
+    except:
+        return False
 
-    # allow_unsafe_werkzeug=True is required for certain cloud environments
+if __name__ == '__main__':
+    # --- Enterprise Multi-Process Orchestration ---
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        # 0. Verify AI Connectivity
+        if verify_ai_connectivity():
+            logger.info("AI Data Analyst: ONLINE (Gemini 2.0 Flash Verified)")
+        else:
+            logger.warning("AI Data Analyst: OFFLINE. Check your API Key or connection.")
+
+        # 1. Start AI Auto-Repair Watchdog
+        if not os.environ.get('VERCEL'):
+            logger.info("Launching AI Auto-Repair Watchdog...")
+            subprocess.Popen([sys.executable, "ai_watchdog.py"])
+
+        # 2. Start Celery Background Worker (Only if Redis is available)
+        if is_redis_running():
+            try:
+                logger.info("Launching Celery Background Task Worker...")
+                subprocess.Popen([sys.executable, "-m", "celery", "-A", "tasks.celery_app", "worker", "--loglevel=info", "--pool=solo"])
+            except Exception as e:
+                logger.error(f"Failed to launch Celery Worker: {e}")
+        else:
+            logger.warning("REDIS NOT FOUND: Background tasks (PDF Reports, Bulk Emails) are DISABLED. Please start Redis server on port 6379.")
+
+    # 3. Start Flask Web Server
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)

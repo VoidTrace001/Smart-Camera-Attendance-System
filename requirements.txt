@@ -8,7 +8,10 @@ qrcode[pil]
 reportlab
 apscheduler
 twilio
-google-generativeai
+google-genai
+python-dotenv
+deepface
+tf-keras
 gunicorn
 psycopg2-binary
 pywin32;platform_system=="Windows"
