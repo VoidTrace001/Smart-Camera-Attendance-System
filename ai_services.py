@@ -8,7 +8,7 @@ import json
 import re
 
 # Use the same API key as the Watchdog
-API_KEY = "AIzaSyAbkKURTHZoKU1gj4nhKTEzzBhn8Uzv53Y"
+API_KEY = "here you need to paste your gemini api key"
 
 # Configure client to use stable v1 API to avoid 404s on v1beta
 client = genai.Client(api_key=API_KEY, http_options={'api_version': 'v1'})
