@@ -13,7 +13,7 @@ from google import genai
 # ==============================================================================
 # VERIVAULT AI - FULLY AUTONOMOUS BACKEND REPAIR SYSTEM
 # ==============================================================================
-API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyAbkKURTHZoKU1gj4nhKTEzzBhn8Uzv53Y")
+API_KEY = os.environ.get("GEMINI_API_KEY", "here you need to paste your gemini api key")
 client = genai.Client(api_key=API_KEY)
 
 DB_NAME = "attendance.db"
