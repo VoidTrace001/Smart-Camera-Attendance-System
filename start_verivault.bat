@@ -62,19 +62,19 @@ echo   [1/2] Starting web app          ... http://localhost:5000
 start "VeriVault - Web App" cmd /k "%PY% app.py"
 
 REM -- wait for it to actually listen, rather than sleeping and hoping ---
-echo   [..] Waiting for port 5000 to open ...
+echo   [..] Waiting for port 5000 ^(~30s: DeepFace pulls in TensorFlow^) ...
 set /a TRIES=0
 :waitloop
 set /a TRIES+=1
 netstat -an | findstr ":5000" | findstr "LISTENING" >nul 2>&1
 if not errorlevel 1 goto :webup
-if %TRIES% GEQ 60 goto :webtimeout
-timeout /t 1 /nobreak >nul
+if %TRIES% GEQ 180 goto :webtimeout
+ping -n 2 127.0.0.1 >nul
 goto :waitloop
 
 :webtimeout
 echo.
-echo   [X] The web app did not open port 5000 within 60 seconds.
+echo   [X] The web app did not open port 5000 within 3 minutes.
 echo       Read the "VeriVault - Web App" window - the error is in there.
 echo       Not starting the supervisor: it needs the schema app.py builds.
 goto :fail
