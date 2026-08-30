@@ -22,9 +22,10 @@
             </div>
 
             <form action="/profile" method="POST">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <!-- Personal Info Group -->
                 <div style="background: var(--secondary-color); padding: 2rem; border-radius: var(--radius-lg); border: 1px solid var(--border-color); margin-bottom: 2rem;">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                    <div class="pair">
                         <div class="form-group" style="margin-bottom: 0;">
                             <label>Professional Full Name</label>
                             <input type="text" name="full_name" value="{{ user.full_name }}" required style="font-weight: 600;">
@@ -32,14 +33,14 @@
                         <div class="form-group" style="margin-bottom: 0;">
                             <label>Institutional Department</label>
                             <div style="padding: 0.75rem 1rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: var(--radius-md); font-weight: 700; color: var(--primary-color);">
-                                {{ user.department if user.department else 'Student Services Department' }}
+                                {{ user.department if user.department else 'Not set' }}
                             </div>
                         </div>
                     </div>
                 </div>
 
                 <!-- Access Group -->
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
+                <div class="pair" style="margin-bottom: 2rem;">
                     <div class="form-group">
                         <label>Portal Username</label>
                         <input type="text" name="username" value="{{ user.username }}" required>
@@ -77,12 +78,18 @@
                     <span class="badge" style="background: var(--primary-color); color: white;">{{ user.role }}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1);">
-                    <span style="font-size: 0.9rem; opacity: 0.7;">Biometrics</span>
-                    <span style="color: var(--success); font-weight: 700;">ACTIVE</span>
+                    <span style="font-size: 0.9rem; opacity: 0.7;">Face enrolled</span>
+                    {% if user.face_embedding %}
+                        <span style="color: var(--success); font-weight: 700;">YES</span>
+                    {% else %}
+                        <span style="color: var(--warning); font-weight: 700;">NOT YET</span>
+                    {% endif %}
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 0.9rem; opacity: 0.7;">Last Sync</span>
-                    <span style="font-size: 0.85rem; font-weight: 600;">Just Now</span>
+                    <span style="font-size: 0.9rem; opacity: 0.7;">Subjects assigned</span>
+                    <span style="font-size: 0.85rem; font-weight: 600;">
+                        {{ user.subjects.split(',')|length if user.subjects else 'None' }}
+                    </span>
                 </div>
             </div>
         </div>
@@ -93,6 +100,7 @@
                 Permanently remove your profile and all associated biometric encodings from the institutional network.
             </p>
             <form action="/delete_account" method="POST" onsubmit="return confirm('CRITICAL: This will permanently delete your institutional access. Proceed?');">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <button type="submit" class="btn" style="background: var(--danger); width: 100%; box-shadow: none;">
                     DESTROY ACCOUNT
                 </button>

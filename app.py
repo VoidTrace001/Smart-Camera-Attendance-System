@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, Response, flash, make_response, session, send_file
+from flask import Flask, render_template, request, redirect, url_for, Response, flash, make_response, session, send_file, send_from_directory
 import os
 # Silence TensorFlow and oneDNN logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
@@ -10,7 +10,7 @@ import warnings
 # Silence FutureWarnings to keep logs clean
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO
 import cv2
 import numpy as np
 import json
@@ -47,25 +47,46 @@ console_handler.setFormatter(log_formatter)
 console_handler.setLevel(logging.INFO)
 
 # Setup logger
-logger = logging.getLogger('VeriVaultAI')
+logger = logging.getLogger('VeriVault')
 logger.setLevel(logging.INFO)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
-from database import init_db, migrate_db, add_student, add_student_face, get_attendance_report, get_all_students, delete_student, add_timetable_entry, get_timetable_entries, delete_timetable_entry, check_login, get_stats, get_recent_attendance, add_teacher, get_all_teachers, delete_user, apply_leave, get_student_leaves, get_all_leave_requests, update_leave_status, get_student_stats, get_student_attendance_history, mark_attendance, add_announcement, get_announcements, get_db_connection, add_faculty_face, get_user_by_id, update_user, log_audit_trail, get_attendance_trends, get_course_distribution
+from database import MEDIA_ROOT, init_db, migrate_db, add_student, add_student_face, get_attendance_report, get_all_students, delete_student, add_timetable_entry, get_timetable_entries, delete_timetable_entry, check_login, get_stats, get_recent_attendance, add_teacher, get_all_teachers, delete_user, apply_leave, get_student_leaves, get_all_leave_requests, update_leave_status, get_student_stats, get_student_attendance_history, mark_attendance, add_announcement, get_announcements, get_db_connection, add_faculty_face, get_user_by_id, update_user, log_audit_trail, get_attendance_trends, get_course_distribution
 from ai_services import ask_database_ai, verify_ai_connectivity
 from deepface import DeepFace
 from camera import VideoCamera
+import recognition
 from scheduler import init_scheduler
 from id_generator import generate_id_card
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'default_fallback_secret_key_change_in_production')
+
+# Sets the secret key (refusing to start on a missing one outside debug),
+# cookie policy, CSRF and response headers.
+from security import init_security, record_failed_login, clear_login_failures, \
+    lockout_remaining, rotate_csrf_token
+init_security(app)
+
 socketio = SocketIO(app, async_mode='threading')
+
+# Ensure private media directories exist (outside static/)
+for _sub in ('attendance_captures', 'profiles'):
+    os.makedirs(os.path.join(MEDIA_ROOT, _sub), exist_ok=True)
 
 # Initialize and Migrate Database
 init_db()
 migrate_db()
+
+# Presence model (class sessions, sightings, intervals, verdicts)
+from presence import init_presence_schema
+init_presence_schema()
+
+# Institution details and the notification delivery record
+from settings import init_settings_schema
+from notification_hub import init_notification_schema
+init_settings_schema()
+init_notification_schema()
 
 # Start background jobs
 init_scheduler(app)
@@ -82,6 +103,32 @@ def get_camera():
             logger.error(f"Camera Hardware Error: {e}. Dashboard-only mode.")
             return None
     return camera_instance
+
+def reload_face_index():
+    """Refresh identities here and signal other processes to do the same."""
+    try:
+        import bus
+        bus.signal_face_reload()
+    except Exception as e:
+        logger.debug(f"Could not signal face reload: {e}")
+    if camera_instance:
+        try:
+            camera_instance.load_embeddings()
+        except Exception as e:
+            logger.debug(f"Local index reload failed: {e}")
+
+
+@app.context_processor
+def inject_institution():
+    """Campus name and coordinates, available to every template.
+
+    The student dashboard used to carry its own copy of the campus latitude
+    and longitude in JavaScript, which drifted from the one in app.py the
+    moment either changed.
+    """
+    from settings import get_settings
+    return {'institution': get_settings()}
+
 
 # Login Required Decorator
 def login_required(f):
@@ -102,6 +149,19 @@ def admin_required(f):
             return redirect(url_for('index'))
         return f(*args, **kwargs)
     return login_required(decorated_function)
+
+def role_required(*roles):
+    """Restrict a route to the given roles. Replaces scattered inline checks."""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if session.get('role') not in roles:
+                flash('You do not have access to that page.', 'error')
+                return redirect(url_for('index'))
+            return f(*args, **kwargs)
+        return login_required(decorated_function)
+    return decorator
+
 
 # --- AI Auto-Repair Error Catcher ---
 import traceback
@@ -130,20 +190,65 @@ def handle_exception(e):
     # Return a generic 500 response to the user
     return "A critical system error occurred. The AI Auto-Repair watchdog has been notified and is analyzing the code.", 500
 
+# --- Private media (face crops, profile photos) ---
+# These used to sit under static/ where Flask served them to anyone.
+@app.route('/media/<path:category>/<path:filename>')
+@login_required
+def private_media(category, filename):
+    """Serves biometric media only to those entitled to see it."""
+    if category not in ('attendance_captures', 'profiles'):
+        return "Not found", 404
+
+    # Students may only ever fetch their own imagery.
+    if session.get('role') == 'Student':
+        owned = (filename.startswith(f"student_{session.get('user_id')}.")
+                 or filename.startswith(f"ID_Card_{session.get('user_id')}.")
+                 or filename.startswith(f"verify_Student_{session.get('user_id')}_"))
+        if not owned:
+            return "Forbidden", 403
+
+    safe_name = os.path.basename(filename)
+    directory = os.path.abspath(os.path.join(MEDIA_ROOT, category))
+    target = os.path.join(directory, safe_name)
+    if not os.path.isfile(target):
+        return "Not found", 404
+    return send_file(target)
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
+
+        locked_for = lockout_remaining(username)
+        if locked_for:
+            flash(f'Too many failed attempts. Try again in {locked_for // 60 + 1} minute(s).', 'error')
+            log_audit_trail(None, f"Login blocked by throttle for '{username}'",
+                            "Auth", None, request.remote_addr)
+            return render_template('login.html')
+
         user = check_login(username, password)
         if user:
+            clear_login_failures(username)
+            # New privilege level, so the pre-login token must not carry over.
+            session.clear()
+            rotate_csrf_token()
             session['logged_in'] = True
             session['user_id'] = user['id']
             session['username'] = user['username']
             session['role'] = user['role']
             session['full_name'] = user['full_name']
+            session.permanent = True
+            log_audit_trail(user['id'], f"Signed in as {user['role']}",
+                            "Auth", user['id'], request.remote_addr)
             flash(f'Welcome, {user["full_name"]}!', 'success')
             return redirect(url_for('index'))
+
+        locked_for = record_failed_login(username)
+        log_audit_trail(None, f"Failed login for '{username}'", "Auth", None, request.remote_addr)
+        if locked_for:
+            flash(f'Too many failed attempts. This account is locked for {locked_for // 60} minutes.', 'error')
         else:
             flash('Invalid credentials.', 'error')
     return render_template('login.html')
@@ -178,12 +283,24 @@ def delete_teacher_route(id):
     flash('Teacher removed.', 'success')
     return redirect(url_for('manage_teachers'))
 
+# Has to live at the root or the browser scopes the worker to /static/ and it
+# never sees a navigation request.
+@app.route('/sw.js')
+def service_worker():
+    response = make_response(send_from_directory('static', 'sw.js'))
+    response.headers['Content-Type'] = 'application/javascript'
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
 @app.route('/')
 @login_required
 def index():
-    if session.get('role') == 'Student':
+    role = session.get('role')
+    if role == 'Student':
         return redirect(url_for('student_dashboard'))
-        
+    if role == 'Teacher':
+        return redirect(url_for('teacher_dashboard'))
+
     stats = get_stats()
     recent = get_recent_attendance(5)
     announcements = get_announcements(limit=3)
@@ -214,8 +331,13 @@ def student_dashboard():
     history = get_student_attendance_history(student_id)[:10]
     leaves = get_student_leaves(student_id)
     announcements = get_announcements(course_filter=student['course'] if student else None, limit=3)
-    
-    return render_template('student_dashboard.html', stats=stats, history=history, leaves=leaves, announcements=announcements)
+
+    import presence as P
+    subjects = P.student_subject_summary(student_id)
+
+    return render_template('student_dashboard.html', stats=stats, history=history, leaves=leaves,
+                           announcements=announcements, subjects=subjects,
+                           today=datetime.now().strftime('%Y-%m-%d'))
 
 @app.route('/add_announcement', methods=['POST'])
 @login_required
@@ -288,7 +410,7 @@ def download_id_card():
     conn.close()
     
     if student:
-        output_path = os.path.join('static', 'profiles', f'ID_Card_{student_id}.pdf')
+        output_path = os.path.join(MEDIA_ROOT, 'profiles', f'ID_Card_{student_id}.pdf')
         generate_id_card(student, output_path)
         
         return send_file(output_path, as_attachment=True)
@@ -358,7 +480,7 @@ def register():
             return redirect(url_for('register'))
 
         # Save Photo for ID Card
-        photo_path = os.path.join('static', 'profiles', f'student_{student_id}.jpg')
+        photo_path = os.path.join(MEDIA_ROOT, 'profiles', f'student_{student_id}.jpg')
         file.save(photo_path)
         file.seek(0) # Reset file pointer for CV2 processing
 
@@ -395,11 +517,8 @@ def register():
         except Exception as e:
             flash(f'An error occurred during photo processing: {str(e)}', 'error')
 
-        # Reload camera neural embeddings
-        if camera_instance:
-            camera_instance.load_embeddings()
-        else:
-            get_camera().load_embeddings()
+        # Tell every vision worker to pick up the new face
+        reload_face_index()
 
         return redirect(url_for('register'))
             
@@ -442,13 +561,14 @@ def delete_timetable_route(id):
     return redirect(url_for('timetable'))
 
 @app.route('/attendance')
+@role_required('Admin', 'Teacher')
 def attendance():
     date_filter = request.args.get('date')
     report = get_attendance_report(date_filter)
     return render_template('attendance.html', report=report, current_date=date_filter)
 
 @app.route('/export_csv')
-@login_required
+@role_required('Admin', 'Teacher')
 def export_csv():
     date_filter = request.args.get('date')
     report = get_attendance_report(date_filter)
@@ -478,7 +598,7 @@ def export_csv():
     return output
 
 @app.route('/register_face', methods=['GET', 'POST'])
-@login_required
+@role_required('Admin', 'Teacher')
 def register_face():
     if request.method == 'POST':
         file = request.files.get('photo')
@@ -509,7 +629,7 @@ def register_face():
 
                 add_faculty_face(session.get('user_id'), face_data_json, embedding_json)
 
-                if camera_instance: camera_instance.load_embeddings()
+                reload_face_index()
                 flash('Your face has been registered for attendance!', 'success')
 
             else:
@@ -521,7 +641,7 @@ def register_face():
     return render_template('register_face.html')
 
 @app.route('/manual_attendance', methods=['GET', 'POST'])
-@login_required
+@role_required('Admin', 'Teacher')
 def manual_attendance():
     if request.method == 'POST':
         student_id = request.form['student_id']
@@ -556,7 +676,7 @@ def manual_attendance():
     return render_template('manual_attendance.html', students=students, today=today)
 
 @app.route('/students')
-@login_required
+@role_required('Admin', 'Teacher')
 def manage_students():
     students = get_all_students()
     return render_template('manage_students.html', students=students)
@@ -584,18 +704,17 @@ def mobile_checkin():
     if session.get('role') != 'Student':
         return {"error": "Only students can use mobile check-in"}, 403
         
+    from settings import get_settings
+    cfg = get_settings()
+
     data = request.json
     student_lat = float(data.get('lat', 0))
     student_lon = float(data.get('lon', 0))
-    
-    # Campus Coordinates (e.g., EThames Hyderabad)
-    CAMPUS_LAT = 17.4300
-    CAMPUS_LON = 78.4480
-    ALLOWED_RADIUS = 300 # meters
-    
-    distance = haversine(student_lat, student_lon, CAMPUS_LAT, CAMPUS_LON)
-    
-    if distance <= ALLOWED_RADIUS:
+
+    distance = haversine(student_lat, student_lon, cfg['campus_lat'], cfg['campus_lon'])
+    allowed = cfg['geofence_radius_m']
+
+    if distance <= allowed:
         student_id = session.get('user_id')
         mark_attendance(student_id, role='Student', status='Present', override_subject="Mobile GPS Check-in")
         
@@ -606,17 +725,15 @@ def mobile_checkin():
     else:
         # Enterprise Audit
         log_audit_trail(session.get('user_id'), f"Failed Check-in (Too far: {int(distance)}m)", "Student", session.get('user_id'), request.remote_addr)
-        return {"error": f"You are {int(distance)} meters away. You must be on campus to check in."}, 403
+        return {"error": f"You are {int(distance)} m away, and check-in is allowed within "
+                         f"{int(allowed)} m of campus."}, 403
 
 @app.route('/delete_student/<int:id>', methods=['POST'])
-@login_required
+@admin_required
 def delete_student_route(id):
     delete_student(id)
     flash('Student deleted successfully.', 'success')
-    if camera_instance:
-        camera_instance.load_embeddings()
-    else:
-        get_camera().load_embeddings()
+    reload_face_index()
         
     return redirect(url_for('manage_students'))
 
@@ -625,9 +742,9 @@ def delete_student_route(id):
 def profile():
     user_id = session.get('user_id')
     if session.get('role') == 'Student':
-        flash('Student profile management is coming soon.', 'info')
-        return redirect(url_for('student_dashboard'))
-        
+        return redirect(url_for('student_profile'))
+
+
     if request.method == 'POST':
         full_name = request.form['full_name']
         username = request.form['username']
@@ -645,6 +762,47 @@ def profile():
         
     user = get_user_by_id(user_id)
     return render_template('profile.html', user=user)
+
+@app.route('/student/profile', methods=['GET', 'POST'])
+@role_required('Student')
+def student_profile():
+    """A student's own account page. Chiefly, the only way they can stop using
+    the EDC number they were enrolled with as their password."""
+    from database import get_student_by_id, set_student_password, student_password_is_default
+    student_id = session.get('user_id')
+
+    if request.method == 'POST':
+        ok, message = set_student_password(
+            student_id,
+            request.form.get('current_password', ''),
+            request.form.get('new_password', ''),
+        )
+        if ok:
+            log_audit_trail(student_id, "Changed own password", "Student", student_id, request.remote_addr)
+            flash(message, 'success')
+            return redirect(url_for('student_profile'))
+        flash(message, 'error')
+
+    return render_template('student_profile.html',
+                           student=get_student_by_id(student_id),
+                           using_default=student_password_is_default(student_id))
+
+
+@app.route('/admin/audit')
+@admin_required
+def audit_log():
+    """An audit trail nobody can read is not an audit trail."""
+    limit = min(int(request.args.get('limit', 200)), 1000)
+    conn = get_db_connection()
+    entries = conn.execute(
+        '''SELECT a.*, COALESCE(u.full_name, s.name, 'System') AS actor
+           FROM audit_logs a
+           LEFT JOIN users u ON a.user_id = u.id
+           LEFT JOIN students s ON a.user_id = s.id AND a.target_type = 'Student'
+           ORDER BY a.timestamp DESC LIMIT ?''', (limit,)).fetchall()
+    conn.close()
+    return render_template('audit_log.html', entries=entries, limit=limit)
+
 
 @app.route('/delete_account', methods=['POST'])
 @login_required
@@ -686,16 +844,20 @@ def api_generate_report():
         return {"error": "Generation failed"}, 500
 
 @app.route('/api/camera/start')
-@login_required
+@role_required('Admin', 'Teacher')
 def start_camera_api():
     cam = get_camera()
+    if not cam:
+        return {"error": "No camera on this machine"}, 503
     cam.start_capture()
     return {"status": "started"}
 
 @app.route('/api/camera/stop')
-@login_required
+@role_required('Admin', 'Teacher')
 def stop_camera_api():
     cam = get_camera()
+    if not cam:
+        return {"error": "No camera on this machine"}, 503
     cam.stop_capture()
     return {"status": "stopped"}
 
@@ -710,63 +872,431 @@ def gen(camera):
             time.sleep(0.1)
 
 @app.route('/scanner')
-@login_required
+@role_required('Admin', 'Teacher')
 def web_scanner():
     return render_template('scanner.html')
 
+# Every face costs one embedding, and the phone is waiting on the response.
+# Past this many the frame is almost certainly a corridor, not a class.
+MAX_SCAN_FACES = 12
+
+
 @app.route('/api/cloud_scan', methods=['POST'])
-@login_required
+@role_required('Admin', 'Teacher')
 def cloud_scan():
-    """Universal Scanning API for any device (Mobile/Tablet/PC)"""
+    """Scanning API for any device (Mobile/Tablet/PC).
+
+    Marks everyone in the frame. Pointing the camera at a row of students is
+    the normal way this gets used, so stopping at the first recognised face -
+    which is what it used to do - marked one student and quietly ignored the
+    rest of the row.
+    """
     data = request.json
     if not data or 'image' not in data:
         return {"error": "No image data"}, 400
-    
-    # Decode base64 image from browser
+
     import base64
     try:
         header, encoded = data['image'].split(",", 1)
         image_bytes = base64.b64decode(encoded)
         nparr = np.frombuffer(image_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
+        if frame is None:
+            return {"error": "Unreadable image"}, 400
+
         cam = get_camera()
         if not cam:
             return {"error": "AI Vision Engine offline"}, 500
-            
-        # Process the frame using our existing AI logic
-        # We temporarily inject this frame into the camera's processing logic
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = cam.face_cascade.detectMultiScale(gray, 1.1, 5)
-        
-        result = {"status": "No face detected", "match": None}
-        
-        for (x, y, w, h) in faces:
-            roi_color = frame[y:y+h, x:x+w]
-            
-            # Neural Recognition using our unified camera logic
+        boxes = recognition.detect_faces_group(gray, cam.face_cascade, cam.profile_cascade)
+
+        detected = len(boxes)
+        if detected > MAX_SCAN_FACES:
+            # Largest first, so the people actually being scanned win over
+            # whoever is walking past in the background.
+            boxes = sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)[:MAX_SCAN_FACES]
+            logger.info(f"Cloud scan found {detected} faces; processing the {MAX_SCAN_FACES} largest.")
+
+        marked, already, seen = [], [], set()
+        unknown = 0
+
+        for (x, y, w, h) in boxes:
+            roi_color = frame[y:y + h, x:x + w]
+            if roi_color.size == 0:
+                continue
+
             person, dist = cam.recognize_face(roi_color)
-            if person:
-                # Mark attendance instantly in cloud with verification photo
-                mark_attendance(person['id'], role=person['role'], captured_face=roi_color)
-                result = {
-                    "status": "Success",
-                    "match": person['name'],
-                    "role": person['role'],
-                    "confidence": round((1.0 - dist) * 100, 1)
-                }
-                break
-        return result
+            if not person:
+                unknown += 1
+                continue
+            if person['id'] in seen:
+                continue
+            seen.add(person['id'])
+
+            entry = {
+                "name": person['name'],
+                "role": person['role'],
+                "confidence": round((1.0 - dist) * 100, 1),
+            }
+            if mark_attendance(person['id'], role=person['role'], captured_face=roi_color):
+                marked.append(entry)
+            else:
+                already.append(entry)
+
+        if marked:
+            status = f"Marked {len(marked)} present"
+        elif already:
+            status = "Already marked"
+        elif detected:
+            status = "Face not recognised"
+        else:
+            status = "No face detected"
+
+        return {
+            "status": status,
+            "faces": detected,
+            "processed": len(boxes),
+            "marked": marked,
+            "already": already,
+            "unknown": unknown,
+        }
     except Exception as e:
+        logger.exception("Cloud scan failed")
         return {"error": str(e)}, 500
 
 @app.route('/video_feed')
+@role_required('Admin', 'Teacher')
 def video_feed():
     cam = get_camera()
-    # Ensure capture is started if this route is called
+    if not cam:
+        return "No camera on this machine", 503
     cam.start_capture()
     return Response(gen(cam),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# =============================================================================
+# Presence dashboards (Phase 5)
+# =============================================================================
+import presence as P
+
+
+@app.route('/teacher')
+@role_required('Teacher', 'Admin')
+def teacher_dashboard():
+    date_str = request.args.get('date') or datetime.now().strftime('%Y-%m-%d')
+    teacher_id = session.get('user_id') if session.get('role') == 'Teacher' else None
+    sessions = P.session_overview(date_str, teacher_id=teacher_id)
+
+    live_id = None
+    now = datetime.now()
+    for s in sessions:
+        if P.parse_ts(s['start_ts']) <= now < P.parse_ts(s['end_ts']):
+            live_id = s['id']
+            break
+
+    return render_template('dashboard_teacher.html', sessions=sessions,
+                           date=date_str, live_session_id=live_id,
+                           announcements=get_announcements(limit=3))
+
+
+@app.route('/admin')
+@admin_required
+def admin_dashboard():
+    date_str = request.args.get('date') or datetime.now().strftime('%Y-%m-%d')
+    return render_template('dashboard_admin.html',
+                           stats=get_stats(),
+                           sessions=P.session_overview(date_str),
+                           cameras=P.camera_health(),
+                           config=P.get_config(),
+                           date=date_str,
+                           announcements=get_announcements(limit=3))
+
+
+@app.route('/api/session/<int:session_id>/live')
+@role_required('Teacher', 'Admin')
+def api_session_live(session_id):
+    state = P.live_session_state(session_id)
+    if not state:
+        return {"error": "No such session"}, 404
+    return state
+
+
+@app.route('/api/session/<int:session_id>/close', methods=['POST'])
+@role_required('Teacher', 'Admin')
+def api_session_close(session_id):
+    summary = P.close_session(session_id)
+    log_audit_trail(session.get('user_id'), f"Closed session {session_id} manually",
+                    "ClassSession", session_id, request.remote_addr)
+    return summary
+
+
+@app.route('/api/session/<int:session_id>/override', methods=['POST'])
+@role_required('Teacher', 'Admin')
+def api_session_override(session_id):
+    """Manual correction of one student's verdict, with an audit entry."""
+    data = request.json or {}
+    student_id = data.get('student_id')
+    status = data.get('status')
+    if not student_id or status not in P.STATUS_ORDER:
+        return {"error": "student_id and a valid status are required"}, 400
+
+    sess = P.get_session(session_id)
+    if not sess:
+        return {"error": "No such session"}, 404
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    existing = cur.execute('SELECT id FROM attendance WHERE session_id = ? AND student_id = ?',
+                           (session_id, student_id)).fetchone()
+    if existing:
+        cur.execute('UPDATE attendance SET status = ?, marked_by_user_id = ? WHERE id = ?',
+                    (status, session.get('user_id'), existing['id']))
+    else:
+        cur.execute('INSERT INTO attendance (student_id, session_id, date, time_in, subject, status, marked_by_user_id) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (student_id, session_id, sess['date'], str(sess['start_ts'])[11:19],
+                     sess['subject'], status, session.get('user_id')))
+    conn.commit()
+    conn.close()
+
+    log_audit_trail(session.get('user_id'), f"Override: student {student_id} -> {status}",
+                    "Attendance", session_id, request.remote_addr)
+    return {"ok": True, "student_id": student_id, "status": status}
+
+
+@app.route('/api/camera/<int:camera_id>/preview')
+@role_required('Teacher', 'Admin')
+def api_camera_preview(camera_id):
+    import bus
+    frame = bus.get_preview(camera_id)
+    if not frame:
+        return "No preview available", 404
+    return Response(frame, mimetype='image/jpeg')
+
+
+# --- Student views -----------------------------------------------------------
+
+@app.route('/student/day')
+@login_required
+def student_day():
+    if session.get('role') != 'Student':
+        return {"error": "Unauthorized"}, 403
+    date_str = request.args.get('date') or datetime.now().strftime('%Y-%m-%d')
+    return {"date": date_str, "classes": P.student_day_breakdown(session.get('user_id'), date_str)}
+
+
+@app.route('/student/calendar')
+@login_required
+def student_calendar_api():
+    if session.get('role') != 'Student':
+        return {"error": "Unauthorized"}, 403
+    today = datetime.now()
+    start = request.args.get('start') or today.replace(day=1).strftime('%Y-%m-%d')
+    end = request.args.get('end') or today.strftime('%Y-%m-%d')
+    return {"days": P.student_calendar(session.get('user_id'), start, end)}
+
+
+@app.route('/student/export')
+@login_required
+def student_export():
+    """Date-range CSV of the student's own record."""
+    if session.get('role') != 'Student':
+        return redirect(url_for('index'))
+    start = request.args.get('start') or datetime.now().replace(day=1).strftime('%Y-%m-%d')
+    end = request.args.get('end') or datetime.now().strftime('%Y-%m-%d')
+
+    conn = get_db_connection()
+    rows = conn.execute(
+        'SELECT date, time_in, subject, status, coverage_pct, present_seconds FROM attendance '
+        'WHERE student_id = ? AND date BETWEEN ? AND ? ORDER BY date DESC, time_in DESC',
+        (session.get('user_id'), start, end)).fetchall()
+    conn.close()
+
+    si = io.StringIO()
+    cw = csv.writer(si)
+    cw.writerow(['Date', 'Time In', 'Subject', 'Status', 'Coverage %', 'Minutes Present'])
+    for r in rows:
+        cw.writerow([r['date'], r['time_in'], r['subject'], r['status'],
+                     r['coverage_pct'] if r['coverage_pct'] is not None else '',
+                     (r['present_seconds'] or 0) // 60])
+
+    output = make_response(si.getvalue())
+    output.headers["Content-Disposition"] = f"attachment; filename=my_attendance_{start}_to_{end}.csv"
+    output.headers["Content-type"] = "text/csv"
+    return output
+
+
+# --- Admin: cameras, thresholds, sessions ------------------------------------
+
+@app.route('/admin/cameras', methods=['GET', 'POST'])
+@admin_required
+def manage_cameras():
+    if request.method == 'POST':
+        P.add_camera(request.form['name'], request.form.get('room'),
+                     request.form.get('source', '0'),
+                     request.form.get('course') or None,
+                     request.form.get('year') or None)
+        flash('Camera added.', 'success')
+        return redirect(url_for('manage_cameras'))
+    return render_template('manage_cameras.html', cameras=P.camera_health())
+
+
+@app.route('/admin/cameras/<int:camera_id>/delete', methods=['POST'])
+@admin_required
+def delete_camera_route(camera_id):
+    P.delete_camera(camera_id)
+    flash('Camera removed.', 'success')
+    return redirect(url_for('manage_cameras'))
+
+
+@app.route('/admin/config', methods=['POST'])
+@admin_required
+def update_config():
+    for key in P.DEFAULT_CONFIG:
+        if key in request.form:
+            P.set_config(key, request.form[key])
+    log_audit_trail(session.get('user_id'), "Updated attendance thresholds",
+                    "Config", None, request.remote_addr)
+    flash('Attendance rules updated.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/settings', methods=['POST'])
+@admin_required
+def update_institution_settings():
+    from settings import DEFAULTS, set_setting
+    changed, errors = [], []
+    for key in DEFAULTS:
+        if key not in request.form:
+            continue
+        try:
+            set_setting(key, request.form[key].strip())
+            changed.append(key)
+        except (ValueError, KeyError) as e:
+            errors.append(str(e))
+
+    if errors:
+        for message in errors:
+            flash(message, 'error')
+    else:
+        log_audit_trail(session.get('user_id'), f"Updated institution settings: {', '.join(changed)}",
+                        "Settings", None, request.remote_addr)
+        flash('Institution settings saved.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+@app.route('/admin/notifications')
+@admin_required
+def notification_log():
+    """What the system actually sent, and what it failed to send."""
+    from notification_hub import recent_notifications, delivery_summary, is_configured as sms_ready
+    from email_service import is_configured as email_ready
+    return render_template('notifications.html',
+                           entries=recent_notifications(300),
+                           summary=delivery_summary(7),
+                           email_ready=email_ready(),
+                           sms_ready=sms_ready())
+
+
+@app.route('/admin/materialize', methods=['POST'])
+@admin_required
+def materialize_now():
+    created = P.materialize_sessions()
+    flash(f'Created {created} class session(s) from the timetable for today.', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+
+# --- PWA & Advanced Classroom Analytics Routes ---
+
+@app.route('/manifest.json')
+def serve_manifest():
+    return send_from_directory('static', 'manifest.json')
+
+@app.route('/admin/seating_heatmap/<int:camera_id>')
+@admin_required
+def seating_heatmap(camera_id):
+    camera = P.get_camera(camera_id)
+    if not camera:
+        flash('Camera not found.', 'danger')
+        return redirect(url_for('manage_cameras'))
+
+    # Most recent sightings, not an arbitrary all-time slice. Without ORDER BY
+    # the LIMIT returned whatever the table scan hit first - in practice the
+    # oldest rows - so the map never reflected where people sit now.
+    conn = get_db_connection()
+    sightings = conn.execute(
+        "SELECT box_x, box_y, box_w, box_h FROM sightings "
+        "WHERE camera_id = ? AND box_x IS NOT NULL "
+        "ORDER BY id DESC LIMIT 2000",
+        (camera_id,)).fetchall()
+    conn.close()
+
+    # The grid has to be derived from the frame the camera actually produces.
+    # Fixed divisors assumed a ~1250x700 frame: at 640x480 every student
+    # collapsed into the top-left cells, at 1920x1080 they all clipped into the
+    # last one. Calibrating off the observed extent keeps the map correct at
+    # any resolution without needing the frame size stored anywhere.
+    GRID = 5
+    points = []
+    for s in sightings:
+        bx, by = s['box_x'], s['box_y']
+        if bx is None or by is None:
+            continue
+        cx = bx + (s['box_w'] or 0) / 2.0     # centre of the face, not its corner
+        cy = by + (s['box_h'] or 0) / 2.0
+        points.append((cx, cy))
+
+    grid = []
+    max_count = 1
+    cell_counts = {}
+    if points:
+        span_x = max(cx for cx, _ in points) or 1.0
+        span_y = max(cy for _, cy in points) or 1.0
+        for cx, cy in points:
+            col_idx = min(GRID - 1, max(0, int(cx / span_x * GRID)))
+            row_idx = min(GRID - 1, max(0, int(cy / span_y * GRID)))
+            key = (row_idx, col_idx)
+            cell_counts[key] = cell_counts.get(key, 0) + 1
+            if cell_counts[key] > max_count:
+                max_count = cell_counts[key]
+
+    for r in range(GRID):
+        row_cells = []
+        for c in range(GRID):
+            cnt = cell_counts.get((r, c), 0)
+            intensity = round(cnt / float(max_count), 2) if max_count > 0 else 0.0
+            row_cells.append({
+                'row_idx': r + 1,
+                'col_idx': c + 1,
+                'count': cnt,
+                'intensity': intensity
+            })
+        grid.append(row_cells)
+
+    return render_template('seating_heatmap.html', camera=camera, grid=grid)
+
+@app.route('/api/voice_announcement/<int:session_id>')
+@role_required('Admin', 'Teacher')
+def voice_announcement(session_id):
+    session_data = P.get_session(session_id)
+    if not session_data:
+        return {'status': 'error', 'message': 'Session not found'}, 404
+
+    conn = get_db_connection()
+    counts = conn.execute(
+        "SELECT status, COUNT(*) as cnt FROM attendance WHERE session_id = ? GROUP BY status",
+        (session_id,)).fetchall()
+    conn.close()
+
+    status_map = {r['status']: r['cnt'] for r in counts}
+    present = status_map.get('Present', 0)
+    late = status_map.get('Late', 0)
+    absent = status_map.get('Absent', 0)
+
+    text = f"Attendance report for {session_data['subject']}. {present} students present, {late} late, and {absent} absent."
+    return {'status': 'success', 'subject': session_data['subject'], 'text': text}
+
 
 def is_redis_running():
     import socket
@@ -782,18 +1312,15 @@ def is_redis_running():
 if __name__ == '__main__':
     # --- Enterprise Multi-Process Orchestration ---
     if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
-        # 0. Verify AI Connectivity
         if verify_ai_connectivity():
-            logger.info("AI Data Analyst: ONLINE (Gemini 2.0 Flash Verified)")
+            logger.info("Analytics Services Engine: ONLINE")
         else:
-            logger.warning("AI Data Analyst: OFFLINE. Check your API Key or connection.")
+            logger.warning("Analytics Services Engine: Standby Mode.")
 
-        # 1. Start AI Auto-Repair Watchdog
         if not os.environ.get('VERCEL'):
-            logger.info("Launching AI Auto-Repair Watchdog...")
+            logger.info("Launching System Diagnostics Watchdog...")
             subprocess.Popen([sys.executable, "ai_watchdog.py"])
 
-        # 2. Start Celery Background Worker (Only if Redis is available)
         if is_redis_running():
             try:
                 logger.info("Launching Celery Background Task Worker...")
@@ -803,5 +1330,5 @@ if __name__ == '__main__':
         else:
             logger.warning("REDIS NOT FOUND: Background tasks (PDF Reports, Bulk Emails) are DISABLED. Please start Redis server on port 6379.")
 
-    # 3. Start Flask Web Server
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+    debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
+    socketio.run(app, host='0.0.0.0', port=5000, debug=debug_mode, allow_unsafe_werkzeug=True)

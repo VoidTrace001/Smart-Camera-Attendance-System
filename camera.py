@@ -1,228 +1,187 @@
-import cv2
-import numpy as np
-import json
-import os
-import threading
-import pyttsx3
-import hmac
+"""
+Interactive camera for the web UI (live preview and the browser scanner).
+
+Continuous classroom monitoring is NOT done here - that belongs to
+vision_worker.py, which runs as its own process and does not depend on a
+browser being open. This class exists for the operator-facing preview and for
+the on-demand scan endpoint, and shares its recognition code with the worker
+via recognition.py.
+"""
 import hashlib
-import time
-from pathlib import Path
-from database import mark_attendance, get_student_by_qr, get_all_people_with_embeddings
-from deepface import DeepFace
+import hmac
 import logging
+import threading
+import time
+
+import cv2
+
+import recognition
+from database import get_student_by_qr, mark_attendance
 
 logger = logging.getLogger('VeriVaultAI')
 
+_tts_lock = threading.Lock()
+
+
 def speak_text(text):
-    """Runs TTS in a separate thread to prevent freezing the camera feed."""
+    """Announce a name. Silently does nothing where TTS is unavailable."""
     def run_speech():
         try:
-            engine = pyttsx3.init()
-            engine.say(text)
-            engine.runAndWait()
+            import pyttsx3
+            with _tts_lock:
+                engine = pyttsx3.init()
+                engine.say(text)
+                engine.runAndWait()
         except Exception as e:
-            logger.error(f"TTS Error: {e}")
+            logger.debug(f"TTS unavailable: {e}")
     threading.Thread(target=run_speech, daemon=True).start()
+
 
 class VideoCamera(object):
     def __init__(self, secret_key=None):
         self.secret_key = secret_key
-        self.video = None 
-        
-        # Load Haar Cascades for fast detection (DeepFace will handle recognition)
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml' if hasattr(cv2, 'data') else str(Path(cv2.__file__).parent / 'data' / 'haarcascade_frontalface_default.xml')
-        self.face_cascade = cv2.CascadeClassifier(cascade_path)
-        
-        eye_cascade_path = cv2.data.haarcascades + 'haarcascade_eye.xml' if hasattr(cv2, 'data') else str(Path(cv2.__file__).parent / 'data' / 'haarcascade_eye.xml')
-        self.eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
-        
-        # Initialize OpenCV QR Detector
+        self.video = None
+
+        self.face_cascade = recognition.get_face_cascade()
+        self.profile_cascade = recognition.get_profile_cascade()
+        self.eye_cascade = recognition.get_eye_cascade()
         self.qr_detector = cv2.QRCodeDetector()
-        
-        # DeepFace Settings
-        self.model_name = "Facenet" # Fast and accurate (128d)
-        self.detector_backend = "opencv" # Fast detection
-        self.distance_metric = "cosine"
-        self.threshold = 0.40 # Adjust for sensitivity
-        
-        self.known_people = [] # List of dicts {id, name, role, embedding}
+
+        self.index = recognition.FaceIndex()
+        self.tracker = recognition.FaceTracker()
         self.load_embeddings()
-        
-        # Multi-Face Tracking State
-        self.face_states = {} # Maps tracking keys to state
+
         self.last_qr_keys = set()
-        
-        logger.info("DeepFace Neural Vision Engine Initialized.")
+        self.announced = {}
+        logger.info("Neural vision engine initialised.")
 
     def __del__(self):
-        if self.video:
-            self.video.release()
+        try:
+            if self.video:
+                self.video.release()
+        except Exception:
+            pass
+
+    # -- hardware -----------------------------------------------------------
 
     def start_capture(self):
         if self.video is None:
             self.video = cv2.VideoCapture(0)
-            logger.info("Camera hardware initialized.")
+            logger.info("Camera hardware initialised.")
 
     def stop_capture(self):
         if self.video:
             self.video.release()
             self.video = None
+            self.tracker = recognition.FaceTracker()
             logger.info("Camera hardware released.")
 
+    # -- identities ---------------------------------------------------------
+
     def load_embeddings(self):
-        """Loads all neural embeddings from the database."""
         try:
-            self.known_people = get_all_people_with_embeddings()
-            logger.info(f"Loaded {len(self.known_people)} neural embeddings for recognition.")
+            count = self.index.load()
+            logger.info(f"Loaded {count} identities for recognition.")
         except Exception as e:
-            logger.error(f"Failed to load embeddings: {e}")
+            logger.error(f"Failed to load identities: {e}")
+
+    @property
+    def known_people(self):
+        return self.index.people
 
     def recognize_face(self, face_img):
-        """Compares a face image against known embeddings using Cosine Similarity."""
-        if not self.known_people:
+        """Returns (person, distance). Kept for the /api/cloud_scan endpoint."""
+        embedding = recognition.embed_face(face_img)
+        if embedding is None:
             return None, 1.0
+        return self.index.match(embedding)
 
+    # -- QR -----------------------------------------------------------------
+
+    def _check_qr(self, image):
+        """Verifies the rotating HMAC token and marks attendance on a match."""
+        current = set()
         try:
-            # Generate embedding for the current face
-            target_embedding = DeepFace.represent(
-                img_path=face_img, 
-                model_name=self.model_name, 
-                enforce_detection=False,
-                detector_backend=self.detector_backend
-            )[0]["embedding"]
-            
-            best_match = None
-            min_dist = 1.0
-            
-            for person in self.known_people:
-                # Cosine distance calculation
-                dist = self.calculate_distance(target_embedding, person['embedding'])
-                if dist < min_dist:
-                    min_dist = dist
-                    best_match = person
-            
-            if min_dist <= self.threshold:
-                return best_match, min_dist
+            data, _bbox, _ = self.qr_detector.detectAndDecode(image)
+            if not data:
+                self.last_qr_keys = current
+                return
+
+            parts = data.split(':')
+            if len(parts) != 3:
+                return
+            qr_hash, ts_str, signature = parts
+            if abs(int(time.time() / 60) - int(ts_str)) > 2:
+                return
+
+            key = self.secret_key.encode() if isinstance(self.secret_key, str) else self.secret_key
+            expected = hmac.new(key, f"{qr_hash}:{ts_str}".encode(), hashlib.sha256).hexdigest()[:16]
+            if not hmac.compare_digest(signature, expected):
+                return
+
+            student = get_student_by_qr(qr_hash)
+            if not student:
+                return
+
+            cv2.putText(image, f"Secure Auth: {student['name']}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
+            marker = f"qr_{student['id']}"
+            current.add(marker)
+            if marker not in self.last_qr_keys:
+                if mark_attendance(student['id'], role='Student', override_subject="Secure QR"):
+                    speak_text(f"QR attendance marked for {student['name']}")
         except Exception as e:
-            logger.error(f"Recognition Error: {e}")
-            
-        return None, 1.0
+            logger.debug(f"QR decode skipped: {e}")
+        finally:
+            self.last_qr_keys = current
 
-    def calculate_distance(self, embed1, embed2):
-        a = np.array(embed1)
-        b = np.array(embed2)
-        return 1 - (np.dot(a, b) / (np.linalg.norm(a) * np.dot(b, b)**0.5))
-
-    def analyze_engagement(self, face_img, track_key):
-        """Asynchronously analyzes emotion and engagement."""
-        def run_analysis():
-            try:
-                objs = DeepFace.analyze(
-                    img_path=face_img, 
-                    actions=['emotion'], 
-                    enforce_detection=False,
-                    detector_backend=self.detector_backend,
-                    silent=True
-                )
-                if objs and track_key in self.face_states:
-                    emotion = objs[0]['dominant_emotion']
-                    # Map emotion to engagement score
-                    engagement_map = {
-                        'happy': 'Positive / Engaged',
-                        'neutral': 'Focused',
-                        'surprise': 'Highly Interested',
-                        'sad': 'Bored / Disengaged',
-                        'angry': 'Frustrated',
-                        'fear': 'Confused',
-                        'disgust': 'Averse'
-                    }
-                    self.face_states[track_key]['emotion'] = engagement_map.get(emotion, "Analyzing...")
-            except: pass
-
-        threading.Thread(target=run_analysis, daemon=True).start()
+    # -- frames -------------------------------------------------------------
 
     def get_frame(self):
-        if self.video is None: return None
+        if self.video is None:
+            return None
         success, image = self.video.read()
-        if not success: return None
+        if not success:
+            return None
 
-        current_frame_qr_keys = set()
-        current_frame_face_keys = set()
+        self._check_qr(image)
 
-        # 1. QR AUTH (Enterprise HMAC)
-        try:
-            data, bbox, _ = self.qr_detector.detectAndDecode(image)
-            if data:
-                parts = data.split(':')
-                if len(parts) == 3:
-                    qr_hash, ts_str, signature = parts
-                    if abs(int(time.time() / 60) - int(ts_str)) <= 2:
-                        raw_data = f"{qr_hash}:{ts_str}"
-                        expected_sig = hmac.new(self.secret_key.encode() if isinstance(self.secret_key, str) else self.secret_key, raw_data.encode(), hashlib.sha256).hexdigest()[:16]
-                        if hmac.compare_digest(signature, expected_sig):
-                            student = get_student_by_qr(qr_hash)
-                            if student:
-                                cv2.putText(image, f"Secure Auth: {student['name']}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                                qr_key = f"Student_QR_{student['id']}"
-                                current_frame_qr_keys.add(qr_key)
-                                if qr_key not in self.last_qr_keys:
-                                    if mark_attendance(student['id'], role='Student', override_subject="Secure QR"):
-                                        speak_text(f"QR Attendance marked for {student['name']}")
-        except: pass
-        self.last_qr_keys = current_frame_qr_keys
-
-        # 2. NEURAL FACE RECOGNITION
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, 1.1, 5)
+        boxes = recognition.detect_faces_group(gray, self.face_cascade, self.profile_cascade)
+        tracks = self.tracker.update(boxes)
 
-        for (x, y, w, h) in faces:
-            roi_color = image[y:y+h, x:x+w]
-            roi_gray = gray[y:y+h, x:x+w]
-            
-            # Tracking and State
-            track_key = f"face_{x//20}_{y//20}"
-            current_frame_face_keys.add(track_key)
-            if track_key not in self.face_states:
-                self.face_states[track_key] = {'blink_count': 0, 'verified': False, 'name': 'Scanning...', 'role': '', 'id': None, 'emotion': 'Analyzing...'}
-            
-            state = self.face_states[track_key]
+        for track in tracks:
+            x, y, w, h = track.box
+            roi_colour = image[y:y + h, x:x + w]
+            roi_gray = gray[y:y + h, x:x + w]
+            if roi_colour.size == 0:
+                continue
 
-            # Recognition (Every 30 frames to save CPU)
-            if state['name'] == 'Scanning...':
-                person, dist = self.recognize_face(roi_color)
-                if person:
-                    state['name'] = person['name']
-                    state['role'] = person['role']
-                    state['id'] = person['id']
-                    # Start emotion analysis once recognized
-                    self.analyze_engagement(roi_color, track_key)
+            if track.needs_identify:
+                embedding = recognition.embed_face(roi_colour)
+                if embedding is not None:
+                    person, distance = self.index.match(embedding)
+                    track.person, track.distance = person, distance
+                    track.last_verified = time.time()
 
-            # Blink Detection (Liveness)
-            eyes = self.eye_cascade.detectMultiScale(roi_gray, 1.1, 3)
-            if len(eyes) == 0: 
-                state['blink_count'] += 1
-                if state['blink_count'] >= 1: state['verified'] = True
+            live = recognition.update_liveness(track, roi_gray, self.eye_cascade)
 
-            # UI Feedback
-            color = (0, 255, 0) if state['verified'] else (0, 165, 255)
-            cv2.rectangle(image, (x, y), (x+w, y+h), color, 2)
-            cv2.putText(image, f"{state['name']} ({state['role']})", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-            
-            # Engagement Overlay
-            cv2.putText(image, f"Mood: {state['emotion']}", (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            
-            if not state['verified']:
-                cv2.putText(image, "Blink to Verify", (x, y+h+40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
+            colour = (0, 200, 0) if live and track.person else (0, 165, 255)
+            cv2.rectangle(image, (x, y), (x + w, y + h), colour, 2)
+            label = f"{track.name}" + (f" ({track.person['role']})" if track.person else "")
+            cv2.putText(image, label, (x, max(y - 10, 12)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2)
+            if not live:
+                cv2.putText(image, "Blink to verify", (x, y + h + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
 
-            # Mark Attendance
-            if state['verified'] and state['id']:
-                if mark_attendance(state['id'], role=state['role'], captured_face=roi_color):
-                    speak_text(f"Welcome {state['name']}")
-
-        # Cleanup
-        keys_to_remove = [k for k in self.face_states.keys() if k not in current_frame_face_keys]
-        for k in keys_to_remove: del self.face_states[k]
+            if live and track.person:
+                person = track.person
+                if mark_attendance(person['id'], role=person['role'], captured_face=roi_colour):
+                    last = self.announced.get(person['id'], 0)
+                    if time.time() - last > 30:
+                        speak_text(f"Welcome {person['name']}")
+                        self.announced[person['id']] = time.time()
 
         ret, jpeg = cv2.imencode('.jpg', image)
-        return jpeg.tobytes()
+        return jpeg.tobytes() if ret else None

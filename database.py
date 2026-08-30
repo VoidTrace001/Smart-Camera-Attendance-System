@@ -1,7 +1,7 @@
 import sqlite3
 import os
+import json
 import cv2
-import numpy as np
 from datetime import datetime
 import hashlib
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -10,17 +10,76 @@ from werkzeug.security import generate_password_hash, check_password_hash
 DB_TYPE = "postgres" if os.environ.get('DATABASE_URL') else "sqlite"
 DB_NAME = "attendance.db"
 
+# Face crops and profile photos live OUTSIDE static/ so Flask will not serve
+# them unauthenticated. They are read back through an authorised route.
+MEDIA_ROOT = os.environ.get('MEDIA_ROOT', 'private_media')
+
+class PgCursorWrapper:
+    def __init__(self, cursor):
+        self._cursor = cursor
+    def execute(self, sql, params=None):
+        if params is not None:
+            sql = sql.replace('?', '%s')
+            return self._cursor.execute(sql, params)
+        return self._cursor.execute(sql)
+    def executemany(self, sql, params_list):
+        sql = sql.replace('?', '%s')
+        return self._cursor.executemany(sql, params_list)
+    def fetchone(self):
+        res = self._cursor.fetchone()
+        return dict(res) if res is not None and not isinstance(res, dict) else res
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        return [dict(r) if not isinstance(r, dict) else r for r in rows] if rows else []
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+    @property
+    def lastrowid(self):
+        return getattr(self._cursor, 'lastrowid', None)
+
+class PgConnWrapper:
+    def __init__(self, conn):
+        self._conn = conn
+    def cursor(self):
+        return PgCursorWrapper(self._conn.cursor())
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+    def executemany(self, sql, params_list):
+        cur = self.cursor()
+        cur.executemany(sql, params_list)
+        return cur
+    def commit(self):
+        return self._conn.commit()
+    def rollback(self):
+        return self._conn.rollback()
+    def close(self):
+        return self._conn.close()
+
 def get_db_connection():
     if DB_TYPE == "postgres":
         import psycopg2
         from psycopg2.extras import RealDictCursor
         conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
-        # This makes Postgres results behave like SQLite Row objects
         conn.cursor_factory = RealDictCursor 
-        return conn
+        return PgConnWrapper(conn)
     else:
-        conn = sqlite3.connect(DB_NAME)
+        # The web app, the attendance engine and one vision worker per camera
+        # are separate processes all writing this one file. On the default
+        # rollback journal a writer blocks every reader, and the default 5s
+        # timeout is short enough that a busy classroom raises
+        # "database is locked" mid-class. WAL lets readers run during a write;
+        # busy_timeout makes the writers queue instead of failing.
+        conn = sqlite3.connect(DB_NAME, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute('PRAGMA journal_mode = WAL')
+            conn.execute('PRAGMA busy_timeout = 30000')
+            conn.execute('PRAGMA synchronous = NORMAL')
+        except sqlite3.Error:
+            pass  # a read-only or locked file must still hand back a connection
         return conn
 
 def migrate_db():
@@ -34,7 +93,8 @@ def migrate_db():
             "students": [
                 ('course', 'TEXT'), ('year', 'TEXT'), ('outlook_email', 'TEXT'),
                 ('parent_email', 'TEXT'), ('parent_phone', 'TEXT'), ('qr_hash', 'TEXT'),
-                ('ou_id', 'TEXT'), ('edc_number', 'TEXT'), ('face_embedding', 'TEXT')
+                ('ou_id', 'TEXT'), ('edc_number', 'TEXT'), ('face_embedding', 'TEXT'),
+                ('password_hash', 'TEXT')
             ],
             "users": [('face_encoding', 'TEXT'), ('subjects', 'TEXT'), ('face_embedding', 'TEXT')],
             "attendance": [
@@ -61,6 +121,7 @@ def migrate_db():
             ('students', 'ou_id', 'TEXT'),
             ('students', 'edc_number', 'TEXT'),
             ('students', 'face_embedding', 'TEXT'),
+            ('students', 'password_hash', 'TEXT'),
             ('users', 'face_encoding', 'TEXT'),
             ('users', 'subjects', 'TEXT'),
             ('users', 'face_embedding', 'TEXT'),
@@ -76,6 +137,18 @@ def migrate_db():
                 cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}')
             except sqlite3.OperationalError: pass
             
+    # Backfill hashes for students registered before hashing existed.
+    try:
+        legacy = cursor.execute(
+            'SELECT id, edc_number FROM students WHERE password_hash IS NULL AND edc_number IS NOT NULL').fetchall()
+        for row in legacy:
+            cursor.execute('UPDATE students SET password_hash = ? WHERE id = ?',
+                           (generate_password_hash(row['edc_number']), row['id']))
+        if legacy:
+            print(f"[MIGRATION] Hashed {len(legacy)} legacy student credential(s).")
+    except Exception as e:
+        print(f"[MIGRATION] Student credential backfill skipped: {e}")
+
     conn.commit()
     conn.close()
 
@@ -99,6 +172,7 @@ def init_db():
             parent_email TEXT,
             parent_phone TEXT,
             qr_hash TEXT,
+            password_hash TEXT,
             UNIQUE(ou_id),
             UNIQUE(edc_number),
             UNIQUE(outlook_email)
@@ -250,13 +324,13 @@ def check_login(username, password):
         conn.close()
         return {'id': user['id'], 'username': user['username'], 'role': user['role'], 'full_name': user['full_name']}
     
-    # Students use plain text EDC number as password for now (can be upgraded later)
-    student = conn.execute('SELECT * FROM students WHERE outlook_email = ? AND edc_number = ?', (username, password)).fetchone()
-    if student:
-        conn.close()
-        return {'id': student['id'], 'username': student['outlook_email'], 'role': 'Student', 'full_name': student['name']}
-        
+    # Students authenticate against a PBKDF2 hash, seeded from their EDC number
+    # at registration. Never compared in plaintext.
+    student = conn.execute('SELECT * FROM students WHERE outlook_email = ?', (username,)).fetchone()
     conn.close()
+    if student and student['password_hash'] and check_password_hash(student['password_hash'], password):
+        return {'id': student['id'], 'username': student['outlook_email'], 'role': 'Student', 'full_name': student['name']}
+
     return None
 
 def add_teacher(username, password, full_name, department, subjects=None):
@@ -274,7 +348,7 @@ def add_teacher(username, password, full_name, department, subjects=None):
 
 def get_all_teachers():
     conn = get_db_connection()
-    teachers = conn.execute('SELECT * FROM users WHERE role = "Teacher"').fetchall()
+    teachers = conn.execute("SELECT * FROM users WHERE role = 'Teacher'").fetchall()
     conn.close()
     return teachers
 
@@ -312,9 +386,12 @@ def add_student(name, ou_id, edc_number, course, year, outlook_email=None, paren
     qr_data = f"STUDENT_QR_{edc_number}_{datetime.now().timestamp()}"
     qr_hash = hashlib.sha256(qr_data.encode()).hexdigest()[:20]
 
+    # Initial credential is the EDC number, stored hashed. Students change it later.
+    password_hash = generate_password_hash(edc_number)
+
     try:
-        cursor.execute('INSERT INTO students (name, ou_id, edc_number, course, year, outlook_email, parent_email, parent_phone, qr_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                       (name, ou_id, edc_number, course, year, outlook_email, parent_email, parent_phone, qr_hash))
+        cursor.execute('INSERT INTO students (name, ou_id, edc_number, course, year, outlook_email, parent_email, parent_phone, qr_hash, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                       (name, ou_id, edc_number, course, year, outlook_email, parent_email, parent_phone, qr_hash, password_hash))
         student_id = cursor.lastrowid
         conn.commit()
         return student_id
@@ -322,6 +399,55 @@ def add_student(name, ou_id, edc_number, course, year, outlook_email=None, paren
         return None
     finally:
         conn.close()
+
+def get_student_by_id(student_id):
+    conn = get_db_connection()
+    student = conn.execute('SELECT * FROM students WHERE id = ?', (student_id,)).fetchone()
+    conn.close()
+    return student
+
+
+def student_password_is_default(student_id):
+    """True while a student is still signing in with their EDC number.
+
+    EDC numbers are printed on ID cards and circulate freely inside a college,
+    so an account still on its seeded credential is effectively unprotected.
+    """
+    conn = get_db_connection()
+    row = conn.execute('SELECT edc_number, password_hash FROM students WHERE id = ?',
+                       (student_id,)).fetchone()
+    conn.close()
+    if not row or not row['password_hash'] or not row['edc_number']:
+        return False
+    return check_password_hash(row['password_hash'], row['edc_number'])
+
+
+def set_student_password(student_id, current_password, new_password):
+    """Returns (ok, message). Verifies the old password before changing it."""
+    conn = get_db_connection()
+    row = conn.execute('SELECT password_hash FROM students WHERE id = ?', (student_id,)).fetchone()
+    if not row:
+        conn.close()
+        return False, "Account not found."
+
+    if not row['password_hash'] or not check_password_hash(row['password_hash'], current_password):
+        conn.close()
+        return False, "Your current password is not correct."
+
+    if len(new_password or '') < 8:
+        conn.close()
+        return False, "Choose a password of at least 8 characters."
+
+    if new_password == current_password:
+        conn.close()
+        return False, "That is the password you are already using."
+
+    conn.execute('UPDATE students SET password_hash = ? WHERE id = ?',
+                 (generate_password_hash(new_password), student_id))
+    conn.commit()
+    conn.close()
+    return True, "Password updated."
+
 
 def add_student_face(student_id, face_encoding_json, face_embedding_json=None):
     conn = get_db_connection()
@@ -380,6 +506,14 @@ def get_all_students():
 def delete_student(student_id):
     conn = get_db_connection()
     conn.execute('PRAGMA foreign_keys = ON')
+    # sightings and presence_intervals carry no foreign key, so the cascade
+    # does not reach them. Removing a student has to clear their biometric
+    # trail too, not just the row that names them.
+    for table in ('sightings', 'presence_intervals'):
+        try:
+            conn.execute(f'DELETE FROM {table} WHERE student_id = ?', (student_id,))
+        except Exception:
+            pass  # table absent on an install predating the presence model
     conn.execute('DELETE FROM students WHERE id = ?', (student_id,))
     conn.commit()
     conn.close()
@@ -391,6 +525,22 @@ def get_student_by_qr(qr_hash):
     return student
 
 # --- Attendance Functions ---
+def save_verification_photo(captured_face, role, person_id, date_str, now):
+    if captured_face is None:
+        return None
+    try:
+        folder = os.path.join(MEDIA_ROOT, 'attendance_captures')
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        filename = f"verify_{role}_{person_id}_{date_str}_{now.strftime('%H%M%S')}.jpg"
+        cv2.imwrite(os.path.join(folder, filename), captured_face)
+        return filename          # relative, so the web layer can serve it
+    except Exception as e:
+        print(f"Error saving verification photo: {e}")
+        return None
+
+
 def mark_attendance(person_id, role='Student', status='Present', override_date=None, override_subject=None, captured_face=None):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -400,21 +550,6 @@ def mark_attendance(person_id, role='Student', status='Present', override_date=N
     
     subject = "Faculty Duty" if role != 'Student' else "Unknown"
     teacher_id = None
-    
-    # Save verification photo if provided
-    verification_photo_path = None
-    if captured_face is not None:
-        try:
-            folder = os.path.join('static', 'attendance_captures')
-            if not os.path.exists(folder):
-                os.makedirs(folder)
-            
-            filename = f"verify_{role}_{person_id}_{date_str}_{now.strftime('%H%M%S')}.jpg"
-            full_path = os.path.join(folder, filename)
-            cv2.imwrite(full_path, captured_face)
-            verification_photo_path = filename # Store relative path for web access
-        except Exception as e:
-            print(f"Error saving verification photo: {e}")
 
     if role == 'Student':
         if override_subject:
@@ -422,8 +557,14 @@ def mark_attendance(person_id, role='Student', status='Present', override_date=N
         else:
             current_day = now.strftime("%A")
             current_time_hm = now.strftime("%H:%M")
-            t_query = 'SELECT subject, teacher_id FROM timetable WHERE day_of_week = ? AND start_time <= ? AND end_time > ?'
-            t_row = cursor.execute(t_query, (current_day, current_time_hm, current_time_hm)).fetchone()
+            # Scope the lookup to THIS student's course/year, otherwise anyone
+            # walking past during any period gets marked into that class.
+            t_query = '''SELECT t.subject, t.teacher_id
+                         FROM timetable t
+                         JOIN students s ON s.course = t.course AND s.year = t.year
+                         WHERE s.id = ? AND t.day_of_week = ?
+                           AND t.start_time <= ? AND t.end_time > ?'''
+            t_row = cursor.execute(t_query, (person_id, current_day, current_time_hm, current_time_hm)).fetchone()
             subject = t_row['subject'] if t_row else "Entry / Free Period"
             teacher_id = t_row['teacher_id'] if t_row else None
 
@@ -434,15 +575,18 @@ def mark_attendance(person_id, role='Student', status='Present', override_date=N
         cursor.execute('SELECT id FROM attendance WHERE user_id = ? AND date = ?', (person_id, date_str))
         
     existing = cursor.fetchone()
-    if existing:
-        if override_date or override_subject:
-            cursor.execute('UPDATE attendance SET status = ?, verification_photo = ? WHERE id = ?', (status, verification_photo_path, existing['id']))
-            conn.commit()
-            conn.close()
-            return True
+    if existing and not (override_date or override_subject):
         conn.close()
         return False
-        
+
+    verification_photo_path = save_verification_photo(captured_face, role, person_id, date_str, now)
+
+    if existing:
+        cursor.execute('UPDATE attendance SET status = ?, verification_photo = ? WHERE id = ?', (status, verification_photo_path, existing['id']))
+        conn.commit()
+        conn.close()
+        return True
+
     if role == 'Student':
         cursor.execute('INSERT INTO attendance (student_id, date, time_in, subject, marked_by_user_id, status, verification_photo) VALUES (?, ?, ?, ?, ?, ?, ?)',
                        (person_id, date_str, time_str, subject, teacher_id, status, verification_photo_path))
@@ -452,20 +596,21 @@ def mark_attendance(person_id, role='Student', status='Present', override_date=N
                        
     conn.commit()
     
-    # Real-time Update via SocketIO
+    # Real-time update for anyone with a dashboard open. This is called from
+    # the vision workers too, where there is no Socket.IO server and the emit
+    # is skipped - see realtime.py.
     try:
-        from app import socketio
+        from realtime import emit
         person_name = cursor.execute('SELECT name FROM students WHERE id = ?', (person_id,)).fetchone() if role == 'Student' else cursor.execute('SELECT full_name as name FROM users WHERE id = ?', (person_id,)).fetchone()
-        socketio.emit('attendance_marked', {
+        if emit('attendance_marked', {
             'name': person_name['name'] if person_name else "Unknown",
             'time': time_str,
             'subject': subject if role == 'Student' else "Faculty Duty",
             'status': status
-        })
-        new_stats = get_stats()
-        socketio.emit('update_stats', new_stats)
+        }):
+            emit('update_stats', get_stats())
     except Exception as e:
-        print(f"SocketIO Error: {e}")
+        print(f"Realtime notify failed: {e}")
     
     # Send Emails & WhatsApp
     if role == 'Student':
@@ -539,11 +684,11 @@ def add_announcement(user_id, title, content, target_course='All'):
                    (user_id, title, content, target_course, now))
     conn.commit()
     
-    # Emit via SocketIO for real-time popups
+    # Real-time popup for anyone with a dashboard open
     try:
-        from app import socketio
+        from realtime import emit
         user_name = cursor.execute('SELECT full_name FROM users WHERE id = ?', (user_id,)).fetchone()
-        socketio.emit('new_announcement', {
+        emit('new_announcement', {
             'title': title,
             'content': content,
             'author': user_name['full_name'] if user_name else "System",
@@ -560,7 +705,7 @@ def get_announcements(course_filter=None, limit=5):
     params = []
     
     if course_filter:
-        query += ' WHERE a.target_course = "All" OR a.target_course = ?'
+        query += " WHERE a.target_course = 'All' OR a.target_course = ?"
         params.append(course_filter)
         
     query += ' ORDER BY a.created_at DESC LIMIT ?'
@@ -575,19 +720,35 @@ def get_stats():
     conn = get_db_connection()
     total = conn.execute('SELECT COUNT(*) FROM students').fetchone()[0]
     now = datetime.now().strftime("%Y-%m-%d")
-    present = conn.execute('SELECT COUNT(DISTINCT student_id) FROM attendance WHERE date = ? AND status = "Present"', (now,)).fetchone()[0]
-    leave = conn.execute('SELECT COUNT(DISTINCT student_id) FROM attendance WHERE date = ? AND status = "On Leave"', (now,)).fetchone()[0]
+    # Late still means they turned up, so it belongs in the headline count -
+    # otherwise a student who was late to everything reads as absent all day.
+    present = conn.execute("SELECT COUNT(DISTINCT student_id) FROM attendance WHERE date = ? AND status IN ('Present', 'Late')", (now,)).fetchone()[0]
+    leave = conn.execute("SELECT COUNT(DISTINCT student_id) FROM attendance WHERE date = ? AND status = 'On Leave'", (now,)).fetchone()[0]
     conn.close()
     return {'total': total, 'present': present, 'leave': leave}
 
 def get_student_stats(student_id):
+    """Headline figures for one student.
+
+    Counted the same way presence.student_subject_summary does it: Present,
+    Late and On Leave all credit the student. Two different attendance
+    percentages in one application is a support call waiting to happen.
+    """
     conn = get_db_connection()
-    p = conn.execute('SELECT COUNT(*) FROM attendance WHERE student_id = ? AND status = "Present"', (student_id,)).fetchone()[0]
-    a = conn.execute('SELECT COUNT(*) FROM attendance WHERE student_id = ? AND status = "Absent"', (student_id,)).fetchone()[0]
-    l = conn.execute('SELECT COUNT(*) FROM attendance WHERE student_id = ? AND status = "On Leave"', (student_id,)).fetchone()[0]
-    total = p + a + l
+    counts = conn.execute(
+        'SELECT status, COUNT(*) AS n FROM attendance WHERE student_id = ? GROUP BY status',
+        (student_id,)).fetchall()
     conn.close()
-    return {'present': p, 'absent': a, 'leave': l, 'percentage': round((p/total*100),1) if total > 0 else 0}
+
+    tally = {row['status']: row['n'] for row in counts}
+    present = tally.get('Present', 0) + tally.get('Late', 0)
+    leave = tally.get('On Leave', 0)
+    absent = tally.get('Absent', 0) + tally.get('Partial', 0)
+
+    held = present + leave + absent
+    credited = present + leave
+    return {'present': present, 'absent': absent, 'leave': leave,
+            'percentage': round(credited / held * 100, 1) if held else 0}
 
 def get_recent_attendance(limit=10):
     conn = get_db_connection()

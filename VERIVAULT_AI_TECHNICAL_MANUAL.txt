@@ -1,95 +1,158 @@
 ================================================================================
-VERIVAULT AI - ENTERPRISE BIOMETRIC ECOSYSTEM
-FULL TECHNICAL DOCUMENTATION & SYSTEM SPECIFICATIONS
+VERIVAULT - OPERATIONS AND SCHEMA REFERENCE
 ================================================================================
 
-1. SYSTEM OVERVIEW
+This document covers deployment, the database schema and the scheduled jobs.
+For what the system does and how attendance is decided, read README.md - that
+is the single source for behaviour, and this file deliberately does not repeat
+it.
+
+
+1. PROCESSES
 --------------------------------------------------------------------------------
-VeriVault AI is an advanced, autonomous institutional management system that 
-leverages Deep Learning, Generative AI, and Microservices Architecture to 
-automate attendance, security, and data analytics.
+Two things must be running.
 
-2. CORE ARCHITECTURE (APEX STACK)
+  python app.py
+      Flask web interface on port 5000. Also starts the APScheduler jobs (see
+      section 4), the error watchdog, and a Celery worker if Redis is up.
+      Serves pages. Does not watch classrooms.
+
+  python supervisor.py
+      Starts attendance_engine.py plus one vision_worker.py per active camera,
+      and restarts them on exit with an increasing backoff (5s, doubling, capped
+      at 120s). A worker that survives 60s has its backoff reset.
+
+To run one camera on its own, bypassing the supervisor:
+
+  CAMERA_ID=<id> python vision_worker.py
+
+Camera ids come from the cameras table, and are shown on each card under
+Admin -> Cameras with the exact command to copy.
+
+
+2. ENVIRONMENT
 --------------------------------------------------------------------------------
-- Backend Framework: Flask (Python 3.11+)
-- Vision Engine: DeepFace Neural Network (FaceNet Model)
-- Database Layer: Hybrid (SQLite for local / PostgreSQL for Cloud)
-- Task Orchestration: Celery + Redis (Asynchronous Processing)
-- Intelligence: Google Gemini 1.5 Flash (Generative AI)
-- Frontend: Vanilla JS, Chart.js (Analytics), Leaflet.js (Geo-Spatial)
-- DevOps: Docker & Docker-Compose (Containerization)
+  SECRET_KEY              Session signing and QR token HMAC. Required.
+  INITIAL_ADMIN_USER      Seeded on first run only.
+  INITIAL_ADMIN_PASS      Seeded on first run only.
+  GEMINI_API_KEY          Optional. Without it the AI assistant and dropout
+                          predictor are disabled; nothing else changes.
+  REDIS_URL               Defaults to redis://localhost:6379/0.
+  MEDIA_ROOT              Defaults to private_media.
+  DATABASE_URL            Postgres. NOT currently functional - see README.
 
-3. COMPREHENSIVE FEATURE BREAKDOWN
+Vision tuning, all optional:
+
+  FACE_MODEL              Default Facenet.
+  FACE_DETECTOR           Default opencv.
+  FACE_THRESHOLD          Cosine distance ceiling for a match. Default 0.40.
+  FACE_REVERIFY_S         Seconds before a track is re-identified. Default 30.
+  FACE_TRACK_TTL_S        Seconds a track survives unseen. Default 3.
+  REQUIRE_LIVENESS        Set to 1 to require a blink before a sighting counts.
+  CAMERA_ID               Which camera row a worker binds to.
+  IDLE_SLEEP_S            Poll interval when no class is scheduled. Default 15.
+
+
+3. SCHEMA
 --------------------------------------------------------------------------------
+Core records
 
-PHASE 1: PREDICTIVE ANALYTICS & GEO-SPATIAL UI
-- Visual Business Intelligence: Animated trendlines and doughnut charts 
-  displaying institutional attendance health in real-time.
-- Satellite Geo-Fencing: Interactive GPS tracking requiring students to be 
-  within a 300m radius of the campus to authorize mobile check-ins.
+  students          Profile, course, batch year, contacts, QR hash, password
+                    hash. Initial credential derives from the EDC number.
+  users             Faculty and admins. Role, department, subjects, face
+                    embedding.
+  student_faces     One row per enrolled face. 128-d Facenet embedding stored
+                    as JSON.
+  timetable         Recurring rules: course, year, weekday, start, end, subject,
+                    teacher.
+  leave_requests    Application and approval workflow. An approved request
+                    covering a date overrides the computed verdict.
+  announcements     Notices, optionally scoped to a course.
 
-PHASE 2: NEURAL NETWORK VISION
-- 128D Mathematical Embeddings: Replaced pixel-matching with high-dimensional 
-  vector comparison (Cosine Similarity) for 99.38% accuracy.
-- Emotion AI: Real-time detection of student mood (Happy, Focused, Bored, 
-  Confused) to generate classroom engagement metrics.
-- Liveness Detection: Mandatory blink-detection logic to prevent spoofing via 
-  printed photographs or digital screens.
+Presence model
 
-PHASE 3: ENTERPRISE ARCHITECTURE
-- Asynchronous Workers: Heavy operations like bulk email dispatch and 
-  visual PDF generation are offloaded to background Celery workers.
-- Self-Healing Watchdog: An autonomous background service that monitors 
-  application crashes and uses LLMs to suggest real-time code repairs.
-- Automated Business Logic: 
-    * 6:00 PM: Daily automated marking of absentees.
-    * Wednesday: AI Dropout Prediction analysis.
-    * Annual: Data retention purge of graduated batches.
+  cameras           Name, room, video source, optional course/year restriction.
+  class_sessions    One timetable rule materialised for one date. Carries
+                    UNIQUE(timetable_id, date), which makes materialisation
+                    idempotent - re-running it changes nothing.
+  sightings         One row per student per bucket per session. Evidence, not
+                    record. Purged on a retention schedule.
+  presence_intervals  Sightings collapsed into continuous stretches.
+  attendance_config Editable thresholds. Seeded from DEFAULT_CONFIG in
+                    presence.py on first run.
 
-PHASE 4: GENERATIVE AI DATABASE ASSISTANT
-- VeriVault AI Analyst: A floating natural language interface.
-- Text-to-SQL Engine: Translates human questions into complex SQL queries.
-- Data Summarization: Analyzes raw database results and provides professional 
-  summaries to administrators.
+Verdicts
 
-4. SECURITY PROTOCOLS
+  attendance        One row per student per session once finalised. Carries
+                    session_id, status, coverage_pct and present_seconds, so
+                    the evidence behind a verdict travels with it.
+
+Operational
+
+  audit_logs        Overrides, config changes, manual marking, mobile check-ins.
+                    User, action, target, timestamp, IP.
+  error_logs        Unhandled exceptions, for the advisory watchdog.
+  ai_predictions    Dropout risk history.
+
+
+4. SCHEDULED JOBS
 --------------------------------------------------------------------------------
-- Password Security: Industry-standard PBKDF2-SHA256 Cryptographic Hashing.
-- QR Security: Dynamic HMAC-signed tokens that expire every 60 seconds 
-  (Anti-Replay Protection).
-- Environment Security: All sensitive API keys and secrets managed via 
-  isolated .env files.
-- Audit Trail: Enterprise-level logging of all sensitive administrative actions 
-  including IP address tracking.
+Registered by scheduler.py against APScheduler when app.py starts.
 
-5. DATABASE SCHEMA SPECIFICATIONS
+  00:05 daily       Materialise tomorrow's class sessions from the timetable.
+  every 30 min      Close any session the engine failed to finalise. Safety net
+                    for the engine having been down.
+  03:30 daily       Purge sightings past the retention window.
+  Fri 17:00         Queue the weekly department PDF and defaulter emails to
+                    Celery. Silently skipped if Redis is absent.
+  Wed 18:00         AI dropout prediction pass over students under 85%.
+  01 Jul 02:00      Delete records of batches graduated four or more years ago.
+
+There is no end-of-day absence sweep. Absence is decided per class when each
+session closes, which is what makes per-subject percentages meaningful.
+
+
+5. CONFIGURATION KEYS
 --------------------------------------------------------------------------------
-- students: Core profile, Course/Batch details, Biometric Vector link.
-- users: RBAC (Admin/Teacher) credentials and Faculty Biometrics.
-- attendance: Timestamped logs with verification_photo ROI storage.
-- student_faces: High-dimensional neural embeddings storage.
-- timetable: Institutional schedule mapping.
-- leave_requests: Digital leave application and approval workflow.
-- ai_predictions: Historical record of AI-detected dropout risks.
-- audit_logs: Permanent record of system-wide sensitive actions.
+Editable at Admin -> Control Room. Defaults in presence.py.
 
-6. OPERATIONAL ORCHESTRATION
+  sample_interval_s        2     Seconds between frames a worker examines.
+  bucket_s                30     Sighting granularity.
+  gap_tolerance_s        180     Absence shorter than this does not break an
+                                 interval.
+  grace_minutes           10     Arrival after this is Late.
+  present_pct             75     Coverage at or above this is Present.
+  partial_pct             40     Coverage at or above this is Partial.
+  end_grace_minutes       10     Last seen this long before the end, and never
+                                 again, counts as Absent.
+  close_delay_s          120     Wait after the end time before finalising.
+  sighting_retention_days 30     Retention for raw sightings.
+
+
+6. FAILURE MODES
 --------------------------------------------------------------------------------
-To start the entire ecosystem, use the unified startup command:
-> python app.py
+  Redis down
+      Workers write sightings directly to the database. Attendance is unaffected.
+      Camera previews and heartbeats stop; the control room reports no signal
+      rather than implying the camera is fine.
 
-Components started:
-1. Flask Server (Web Interface & Scanner)
-2. AI Watchdog (Autonomous Maintenance)
-3. Celery Worker (Background Task Engine)
+  Engine down
+      Sightings still accumulate. Sessions are not finalised until the engine
+      returns, or until the 30-minute scheduler sweep picks them up.
 
-7. DEFAULT CREDENTIALS
+  Camera unreachable
+      The worker logs the failure and the supervisor restarts it with backoff.
+      Other cameras are unaffected.
+
+  Session never closed
+      close_stale_sessions covers it every 30 minutes. A teacher can also
+      finalise a class by hand from the live roster.
+
+
+7. CREDENTIALS
 --------------------------------------------------------------------------------
-For security compliance, default credentials are not stored in public 
-documentation. 
-- Deployment: Configure your initial Admin account via environment variables
-  or during the first-run database initialization process.
+No default credentials are published. The first admin comes from
+INITIAL_ADMIN_USER / INITIAL_ADMIN_PASS, seeded once on first run. Change the
+password after first login.
 
-================================================================================
-VERIVAULT AI - PREPARED FOR PRODUCTION DEPLOYMENT
 ================================================================================

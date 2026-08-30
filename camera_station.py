@@ -1,6 +1,5 @@
 import cv2
 import os
-import time
 from camera import VideoCamera
 from database import migrate_db, init_db
 

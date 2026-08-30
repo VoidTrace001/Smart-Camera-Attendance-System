@@ -1,0 +1,206 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Cameras</h1>
+    <p>A camera watches the classes timetabled for its room, and nothing else.</p>
+</header>
+
+<style>
+    .cam-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); gap: 2.5rem; align-items: start; }
+    @media (max-width: 900px) { .cam-layout { grid-template-columns: 1fr; } }
+
+    .cam-card { display: flex; gap: 1.25rem; padding: 1.25rem; border: 1px solid var(--border-color);
+        border-radius: var(--radius-md); margin-bottom: 1rem; background: var(--card-bg);
+        transition: var(--transition-all); }
+    .cam-card:hover { box-shadow: var(--shadow-md); }
+    .cam-card.offline { border-left: 4px solid var(--border-color); }
+    .cam-card.online { border-left: 4px solid var(--success); }
+
+    .cam-thumb { width: 132px; height: 88px; flex-shrink: 0; border-radius: 6px; background: #0f172a;
+        display: flex; align-items: center; justify-content: center; color: #475569; font-size: 0.7rem;
+        overflow: hidden; }
+    .cam-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+    .cam-info { flex: 1; min-width: 0; }
+    .cam-title { font-weight: 800; font-size: 1.05rem; }
+    .cam-sub { font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem; }
+    .cam-scope { margin-top: 0.6rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+    .launch { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem;
+        background: var(--secondary-color); border: 1px solid var(--border-color);
+        border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.75rem; }
+    .launch code { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; color: var(--text-main); }
+    .launch button { background: none; border: none; cursor: pointer; color: var(--primary-color);
+        font-weight: 700; font-size: 0.72rem; padding: 0.1rem 0.35rem; border-radius: 4px; }
+    .launch button:hover { background: rgba(79, 70, 229, 0.12); }
+
+    .field-hint { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.35rem; line-height: 1.45; }
+    .empty { text-align: center; padding: 3rem 1rem; color: var(--text-muted); }
+    .source-examples { list-style: none; padding: 0; margin: 0.6rem 0 0; font-size: 0.75rem; color: var(--text-muted); }
+    .source-examples li { padding: 0.2rem 0; }
+    .source-examples code { background: var(--secondary-color); padding: 0.1rem 0.35rem; border-radius: 4px; }
+</style>
+
+<div class="cam-layout">
+    <div class="card">
+        <h2 style="margin:0 0 1.5rem;">Registered cameras</h2>
+
+        {% if cameras %}
+            {% for c in cameras %}
+            <div class="cam-card {{ 'online' if c.online else 'offline' }}">
+                <div class="cam-thumb" data-camera="{{ c.id }}"><span class="thumb-placeholder">offline</span></div>
+
+                <div class="cam-info">
+                    <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+                        <span class="cam-title">{{ c.name }}</span>
+                        {% if c.online %}
+                            <span class="badge badge-success">{{ c.heartbeat.state|replace('_', ' ') }}</span>
+                        {% else %}
+                            <span class="badge badge-danger">Not running</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="cam-sub">
+                        {{ c.room or 'No room set' }} &middot; source <code>{{ c.source }}</code>
+                    </div>
+
+                    <div class="cam-scope">
+                        {% if c.course or c.year %}
+                            <span class="badge badge-primary">{{ c.course or 'Any course' }}</span>
+                            <span class="badge badge-primary">{{ c.year or 'Any year' }}</span>
+                        {% else %}
+                            <span class="badge badge-primary">Any class in this room</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="launch">
+                        <code id="cmd-{{ c.id }}">CAMERA_ID={{ c.id }} python vision_worker.py</code>
+                        <button type="button" onclick="copyCommand({{ c.id }})">copy</button>
+                    </div>
+                </div>
+
+                <form method="post" action="/admin/cameras/{{ c.id }}/delete"
+                      onsubmit="return confirmRemoval(event, '{{ c.name|e }}')">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <button class="btn" type="submit"
+                            style="background: var(--danger); padding: 0.5rem 1rem; box-shadow: none;">
+                        Remove
+                    </button>
+                </form>
+            </div>
+            {% endfor %}
+
+            <p style="margin:1.5rem 0 0; font-size:0.8rem; color:var(--text-muted);">
+                A camera showing <em>Not running</em> has no worker process attached, or Redis is
+                not available to carry its heartbeat. Attendance is still recorded either way &mdash;
+                only this status panel depends on Redis.
+            </p>
+        {% else %}
+            <div class="empty">
+                <p style="margin:0 0 0.5rem; font-weight:700; font-size:1.05rem;">No cameras yet.</p>
+                <p style="margin:0; font-size:0.9rem; max-width: 42ch; margin-inline: auto;">
+                    Add one on the right. Once a worker is running against it, the camera picks up
+                    whichever class the timetable puts in its room and starts recording who is there.
+                </p>
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2 style="margin:0 0 1.5rem;">Add a camera</h2>
+
+        <form method="post">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" id="name" name="name" required placeholder="Lecture Hall A">
+                <div class="field-hint">Whatever staff call the room. It shows up on the control room.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="room">Room</label>
+                <input type="text" id="room" name="room" placeholder="Block B, 2nd floor">
+            </div>
+
+            <div class="form-group">
+                <label for="source">Video source</label>
+                <input type="text" id="source" name="source" value="0" required>
+                <ul class="source-examples">
+                    <li><code>0</code> &mdash; the machine's built-in or first USB camera</li>
+                    <li><code>1</code> &mdash; a second USB camera on the same machine</li>
+                    <li><code>rtsp://user:pass@10.0.0.40:554/stream1</code> &mdash; an IP camera</li>
+                </ul>
+            </div>
+
+            <div class="form-group">
+                <label for="course">Restrict to course <span style="font-weight:400; color:var(--text-muted);">(optional)</span></label>
+                <input type="text" id="course" name="course" placeholder="BCA">
+            </div>
+
+            <div class="form-group">
+                <label for="year">Restrict to year <span style="font-weight:400; color:var(--text-muted);">(optional)</span></label>
+                <input type="text" id="year" name="year" placeholder="2027 Batch">
+                <div class="field-hint">
+                    Leave both blank if the room is shared &mdash; the camera then follows whatever
+                    the timetable schedules there.
+                </div>
+            </div>
+
+            <button class="btn" type="submit" style="width:100%;">Add camera</button>
+        </form>
+
+        <div style="margin-top:2rem; padding-top:1.5rem; border-top:1px solid var(--border-color);">
+            <div style="font-size:0.8rem; font-weight:800; text-transform:uppercase; letter-spacing:0.1em; color:var(--text-muted); margin-bottom:0.75rem;">
+                After adding
+            </div>
+            <p style="margin:0; font-size:0.85rem; color:var(--text-muted); line-height:1.6;">
+                Start the worker for the new camera with the command shown on its card, or run
+                <code>python supervisor.py</code> to start every active camera at once along with
+                the attendance engine.
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+    function copyCommand(id) {
+        const text = document.getElementById('cmd-' + id).innerText;
+        navigator.clipboard.writeText(text).then(() => {
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success',
+                        title: 'Command copied', showConfirmButton: false, timer: 1600 });
+        });
+    }
+
+    async function confirmRemoval(event, name) {
+        event.preventDefault();
+        const form = event.target;
+        const answer = await Swal.fire({
+            icon: 'warning',
+            title: `Remove ${name}?`,
+            text: 'Attendance already recorded through this camera is kept. Only the camera is removed.',
+            showCancelButton: true,
+            confirmButtonText: 'Remove',
+            confirmButtonColor: '#ef4444'
+        });
+        if (answer.isConfirmed) form.submit();
+        return false;
+    }
+
+    function refreshThumbs() {
+        document.querySelectorAll('.cam-thumb').forEach(box => {
+            const probe = new Image();
+            probe.onload = () => { box.innerHTML = ''; box.appendChild(probe); };
+            probe.onerror = () => {
+                if (!box.querySelector('.thumb-placeholder')) {
+                    box.innerHTML = '<span class="thumb-placeholder">offline</span>';
+                }
+            };
+            probe.src = `/api/camera/${box.dataset.camera}/preview?t=${Date.now()}`;
+        });
+    }
+
+    refreshThumbs();
+    setInterval(refreshThumbs, 5000);
+</script>
+{% endblock %}

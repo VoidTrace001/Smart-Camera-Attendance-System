@@ -1,0 +1,70 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Audit Trail</h1>
+    <p>Sensitive actions, who took them, and from where.</p>
+</header>
+
+<style>
+    .audit-table td { font-size: 0.88rem; vertical-align: top; }
+    .audit-when { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-muted); }
+    .audit-ip { font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem; color: var(--text-muted); }
+    .audit-action { font-weight: 600; }
+    .empty { text-align: center; padding: 3rem 1rem; color: var(--text-muted); }
+</style>
+
+<div class="card">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+        <div>
+            <h2 style="margin:0;">Recent activity</h2>
+            <p style="margin:0.3rem 0 0; color:var(--text-muted); font-size:0.9rem;">
+                Newest first. Attendance overrides, config changes, logins and deletions are all recorded.
+            </p>
+        </div>
+        <form method="get" style="display:flex; gap:0.5rem; align-items:center;">
+            <label for="limit" style="margin:0; font-size:0.85rem;">Show</label>
+            <select id="limit" name="limit" onchange="this.form.submit()" style="width:auto;">
+                {% for n in [100, 200, 500, 1000] %}
+                <option value="{{ n }}" {% if limit == n %}selected{% endif %}>{{ n }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+
+    <div style="margin-top:1.75rem; overflow-x:auto;">
+        {% if entries %}
+        <table class="datatable audit-table">
+            <thead>
+                <tr>
+                    <th>When</th><th>Who</th><th>Action</th><th>Target</th><th>From</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in entries %}
+                <tr>
+                    <td class="audit-when">{{ e.timestamp }}</td>
+                    <td>{{ e.actor }}</td>
+                    <td class="audit-action">{{ e.action }}</td>
+                    <td>
+                        {% if e.target_type %}
+                            {{ e.target_type }}{% if e.target_id %} #{{ e.target_id }}{% endif %}
+                        {% else %}&mdash;{% endif %}
+                    </td>
+                    <td class="audit-ip">{{ e.ip_address or 'unknown' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty">
+            <p style="margin:0 0 0.5rem; font-weight:700;">Nothing recorded yet.</p>
+            <p style="margin:0; font-size:0.9rem;">
+                Entries appear here as soon as someone signs in, overrides a verdict
+                or changes the attendance rules.
+            </p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

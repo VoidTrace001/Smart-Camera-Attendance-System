@@ -12,6 +12,7 @@
         <span style="font-size: 1.5rem;">📅</span> Add New Schedule Entry
     </h3>
     <form action="/timetable" method="POST" style="margin-top: 1.5rem;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem;">
             
             <div class="form-group">
@@ -118,6 +119,7 @@
                     {% if session.get('role') == 'Admin' %}
                     <td style="text-align: center;">
                         <form action="{{ url_for('delete_timetable_route', id=entry.id) }}" method="POST" onsubmit="return confirm('Remove this class from the schedule?');">
+                            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                             <button type="submit" style="color: var(--danger); background: none; border: none; cursor: pointer; font-weight: 700; font-size: 0.85rem; text-decoration: underline;">DELETE</button>
                         </form>
                     </td>

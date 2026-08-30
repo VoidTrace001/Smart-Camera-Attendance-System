@@ -3,11 +3,12 @@
 {% block content %}
 <header>
     <h1>Register Student</h1>
-    <p>EThames Business School (Osmania University Affiliated)</p>
+    <p>{{ institution.institution_name }}{% if institution.institution_affiliation %} ({{ institution.institution_affiliation }}){% endif %}</p>
 </header>
 
 <div class="card" style="max-width: 650px; margin: 0 auto;">
     <form action="/register" method="POST" enctype="multipart/form-data">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <div class="form-group">
             <label for="name">Full Name</label>
             <input type="text" id="name" name="name" required placeholder="e.g. John Doe">

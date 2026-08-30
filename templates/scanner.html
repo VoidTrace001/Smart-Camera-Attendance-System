@@ -3,7 +3,7 @@
 {% block content %}
 <header>
     <h1>Universal Cloud Scanner</h1>
-    <p>Biometric verification via any device camera.</p>
+    <p>Point the camera at a row. Everyone recognised in the frame is marked.</p>
 </header>
 
 <div class="card" style="max-width: 600px; margin: 0 auto; text-align: center;">
@@ -15,16 +15,17 @@
         <div id="scanLine" style="position: absolute; top: 0; left: 0; width: 100%; height: 2px; background: var(--primary-color); box-shadow: 0 0 15px var(--primary-color); animation: scan 2s infinite linear;"></div>
     </div>
 
-    <div id="resultBox" style="margin-top: 2rem; padding: 1.5rem; border-radius: var(--radius-md); background: var(--secondary-color); min-height: 80px; display: flex; align-items: center; justify-content: center; flex-direction: column;">
-        <div id="statusText" style="font-weight: 700; font-size: 1.1rem; color: var(--text-muted);">Ready to Scan...</div>
-        <div id="matchInfo" style="margin-top: 0.5rem; display: none;">
-            <span class="badge badge-success" id="matchName" style="font-size: 1rem; padding: 0.5rem 1.5rem;"></span>
-        </div>
+    <div id="resultBox">
+        <div id="statusText">Ready to scan</div>
+        <div id="tally"></div>
     </div>
 
-    <div style="margin-top: 2rem; display: flex; gap: 1rem;">
-        <button id="startBtn" class="btn" style="flex: 1;" onclick="startScanner()">Start Camera</button>
-        <button id="stopBtn" class="btn" style="flex: 1; background: var(--danger);" onclick="stopScanner()" disabled>Stop</button>
+    <div id="roll"></div>
+
+    <div class="scan-controls">
+        <button id="startBtn" class="btn" onclick="startScanner()">Start Camera</button>
+        <button id="flipBtn" class="btn" onclick="flipCamera()" style="background: var(--secondary-color); color: var(--text-main); flex: 0 0 auto;" title="Switch camera">Flip</button>
+        <button id="stopBtn" class="btn" style="background: var(--danger);" onclick="stopScanner()" disabled>Stop</button>
     </div>
 </div>
 
@@ -34,19 +35,52 @@
         100% { top: 100%; }
     }
     #scannerContainer.success { border: 4px solid var(--success); }
+
+    #resultBox { margin-top: 2rem; padding: 1.35rem; border-radius: var(--radius-md);
+                 background: var(--secondary-color); }
+    #statusText { font-weight: 700; font-size: 1.05rem; }
+    #tally { margin-top: 0.4rem; font-size: 0.8rem; color: var(--text-muted);
+             letter-spacing: 0.02em; min-height: 1.1em; }
+
+    #roll { margin-top: 1.25rem; text-align: left; display: flex;
+            flex-direction: column; gap: 0.5rem; }
+    #roll:empty { display: none; }
+
+    .roll-row { display: flex; align-items: center; gap: 0.75rem;
+                padding: 0.7rem 0.9rem; border-radius: var(--radius-md);
+                border: 1px solid var(--border-color); background: var(--card-bg);
+                animation: rollIn 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+    .roll-row .who { flex: 1; min-width: 0; font-weight: 700; font-size: 0.9rem;
+                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .roll-row .conf { font-size: 0.72rem; color: var(--text-muted);
+                      font-variant-numeric: tabular-nums; }
+
+    @keyframes rollIn { from { opacity: 0; transform: translateY(-6px); } }
+
+    .scan-controls { margin-top: 2rem; display: flex; gap: 0.75rem; }
+    .scan-controls .btn { flex: 1; }
+
+    @media (max-width: 480px) {
+        .scan-controls { flex-wrap: wrap; }
+        .scan-controls .btn { flex: 1 1 100%; }
+        .scan-controls #flipBtn { flex: 1 1 100%; order: 3; }
+    }
 </style>
 
 <script>
-let video = document.getElementById('webcam');
-let canvas = document.createElement('canvas');
-let interval = null;
+const video = document.getElementById('webcam');
+const canvas = document.createElement('canvas');
 const statusText = document.getElementById('statusText');
-const matchInfo = document.getElementById('matchInfo');
-const matchName = document.getElementById('matchName');
+const tally = document.getElementById('tally');
+const roll = document.getElementById('roll');
+
+let scanning = false;
+let timer = null;
+let facing = 'environment';       // the back camera - you cannot scan a row with a selfie lens
+const seen = new Map();
 
 async function startScanner() {
-    // Enterprise Security Check: getUserMedia requires HTTPS or localhost
-    if (!window.isSecureContext && window.location.hostname !== "localhost") {
+    if (!window.isSecureContext && window.location.hostname !== 'localhost') {
         Swal.fire({
             icon: 'error',
             title: 'Security Restriction',
@@ -66,71 +100,110 @@ async function startScanner() {
     }
 
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: "user" }, 
-            audio: false 
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: facing, width: { ideal: 1280 } },
+            audio: false
         });
         video.srcObject = stream;
         document.getElementById('startBtn').disabled = true;
         document.getElementById('stopBtn').disabled = false;
-        
-        // Start the processing loop
-        interval = setInterval(captureAndScan, 2000); // Scan every 2 seconds
-        statusText.innerText = "🔍 Scanning for faces...";
+
+        scanning = true;
+        statusText.innerText = 'Scanning for faces';
+        scanLoop();
     } catch (err) {
-        alert("Camera Access Denied or Not Found: " + err);
+        Swal.fire({ icon: 'error', title: 'Camera unavailable', text: String(err) });
     }
 }
 
 function stopScanner() {
-    let stream = video.srcObject;
-    if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-    }
+    scanning = false;
+    clearTimeout(timer);
+
+    const stream = video.srcObject;
+    if (stream) stream.getTracks().forEach(track => track.stop());
     video.srcObject = null;
-    clearInterval(interval);
+
     document.getElementById('startBtn').disabled = false;
     document.getElementById('stopBtn').disabled = true;
-    statusText.innerText = "Scanner Stopped.";
-    matchInfo.style.display = "none";
+    statusText.innerText = seen.size ? `Stopped - ${seen.size} marked this session` : 'Scanner stopped';
+}
+
+async function flipCamera() {
+    facing = facing === 'environment' ? 'user' : 'environment';
+    if (!video.srcObject) return;
+    const wasScanning = scanning;
+    stopScanner();
+    if (wasScanning) await startScanner();
+}
+
+// One scan at a time. A row of ten faces takes longer than the old fixed 2s
+// interval, and the requests were stacking up on top of each other.
+function scanLoop() {
+    if (!scanning) return;
+    timer = setTimeout(async () => {
+        await captureAndScan();
+        scanLoop();
+    }, 1500);
+}
+
+function addToRoll(person, state) {
+    const key = `${person.role}:${person.name}`;
+    if (seen.has(key)) return false;
+    seen.set(key, state);
+
+    const row = document.createElement('div');
+    row.className = 'roll-row';
+    row.innerHTML = `
+        <span class="badge ${state === 'marked' ? 'badge-success' : 'badge-primary'}">
+            ${state === 'marked' ? 'Present' : 'Already in'}
+        </span>
+        <span class="who"></span>
+        <span class="conf">${person.confidence}%</span>`;
+    row.querySelector('.who').textContent = `${person.name} (${person.role})`;
+    roll.prepend(row);
+    return true;
 }
 
 async function captureAndScan() {
-    if (!video.srcObject) return;
+    if (!video.srcObject || !video.videoWidth) return;
 
-    // Draw video frame to hidden canvas
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
-    
-    // Convert to base64
-    const imageData = canvas.toDataURL('image/jpeg', 0.7);
 
     try {
         const response = await fetch('/api/cloud_scan', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: imageData })
+            body: JSON.stringify({ image: canvas.toDataURL('image/jpeg', 0.7) })
         });
         const result = await response.json();
+        if (result.error) {
+            statusText.innerText = result.error;
+            return;
+        }
 
-        if (result.status === "Success") {
-            statusText.innerText = "✅ ATTENDANCE MARKED";
-            matchName.innerText = `${result.match} (${result.role})`;
-            matchInfo.style.display = "block";
-            
-            // Visual feedback
-            document.getElementById('scannerContainer').classList.add('success');
-            setTimeout(() => {
-                document.getElementById('scannerContainer').classList.remove('success');
-                statusText.innerText = "🔍 Scanning for faces...";
-                matchInfo.style.display = "none";
-            }, 3000);
-        } else {
-            statusText.innerText = result.status || "🔍 Scanning...";
+        let fresh = 0;
+        (result.marked || []).forEach(p => { if (addToRoll(p, 'marked')) fresh++; });
+        (result.already || []).forEach(p => addToRoll(p, 'already'));
+
+        statusText.innerText = result.status;
+
+        const parts = [`${result.faces} face${result.faces === 1 ? '' : 's'} in frame`];
+        if (result.unknown) parts.push(`${result.unknown} not recognised`);
+        if (result.faces > result.processed) parts.push(`${result.processed} closest processed`);
+        if (seen.size) parts.push(`${seen.size} on the roll`);
+        tally.innerText = parts.join(' · ');
+
+        if (fresh) {
+            const box = document.getElementById('scannerContainer');
+            box.classList.add('success');
+            setTimeout(() => box.classList.remove('success'), 1200);
         }
     } catch (err) {
-        console.error("Scan Error:", err);
+        console.error('Scan error:', err);
+        statusText.innerText = 'Lost contact with the server';
     }
 }
 </script>

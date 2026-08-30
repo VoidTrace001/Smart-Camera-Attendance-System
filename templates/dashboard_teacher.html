@@ -1,0 +1,216 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>{{ session.get('full_name') }}</h1>
+    <p>Teacher Portal &mdash; live class attendance</p>
+</header>
+
+<style>
+    .session-row { display: flex; align-items: center; gap: 1.25rem; padding: 1.1rem 1.25rem;
+        border: 1px solid var(--border-color); border-radius: var(--radius-md); margin-bottom: 0.75rem;
+        background: var(--card-bg); transition: var(--transition-all); }
+    .session-row:hover { box-shadow: var(--shadow-md); }
+    .session-row.is-live { border-left: 5px solid var(--success); }
+    .session-time { font-weight: 800; font-variant-numeric: tabular-nums; min-width: 6.5rem; }
+    .session-meta { flex: 1; min-width: 0; }
+    .session-counts { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .live-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+        background: var(--success); margin-right: 0.4rem; animation: pulse 1.6s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+    @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+
+    .roster { width: 100%; border-collapse: collapse; }
+    .roster th, .roster td { padding: 0.7rem 0.75rem; border-bottom: 1px solid var(--border-color); text-align: left; }
+    .roster td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .bar { height: 8px; border-radius: 4px; background: var(--secondary-color); overflow: hidden; min-width: 90px; }
+    .bar > span { display: block; height: 100%; border-radius: 4px; }
+    .in-room { color: var(--success); font-weight: 800; }
+    .out-room { color: var(--text-muted); }
+    .override-select { padding: 0.3rem 0.5rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); }
+</style>
+
+<div class="card" style="margin-bottom: 2rem;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
+        <h2 style="margin:0;">Classes on {{ date }}</h2>
+        <form method="get" style="display:flex; gap:0.5rem; align-items:center;">
+            <input type="date" name="date" value="{{ date }}">
+            <button class="btn" type="submit">View</button>
+        </form>
+    </div>
+
+    <div style="margin-top:1.5rem;">
+        {% if sessions %}
+            {% for s in sessions %}
+            <div class="session-row {% if s.id == live_session_id %}is-live{% endif %}">
+                <div class="session-time">{{ s.start }}&ndash;{{ s.end }}</div>
+                <div class="session-meta">
+                    <div style="font-weight:800;">
+                        {% if s.id == live_session_id %}<span class="live-dot"></span>{% endif %}
+                        {{ s.subject }}
+                    </div>
+                    <div style="color:var(--text-muted); font-size:0.85rem;">
+                        {{ s.course }} &middot; {{ s.year }} &middot; {{ s.status }}
+                    </div>
+                </div>
+                <div class="session-counts">
+                    <span class="badge badge-success">{{ s.counts['Present'] }} present</span>
+                    <span class="badge badge-warning">{{ s.counts['Late'] }} late</span>
+                    <span class="badge badge-primary">{{ s.counts['Partial'] }} partial</span>
+                    <span class="badge badge-danger">{{ s.counts['Absent'] }} absent</span>
+                </div>
+                <button class="btn" style="padding:0.5rem 1rem;"
+                        onclick="openSession({{ s.id }}, '{{ s.subject|e }}')">Open</button>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p style="color:var(--text-muted);">
+                No classes scheduled for this date. Sessions are built from the timetable
+                each night &mdash; an administrator can create today's now from the admin dashboard.
+            </p>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card" id="rosterCard" style="display:none;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
+        <div>
+            <h2 style="margin:0;" id="rosterTitle">Roster</h2>
+            <p style="margin:0.25rem 0 0; color:var(--text-muted);" id="rosterSummary"></p>
+        </div>
+        <div style="display:flex; gap:0.5rem;">
+            <button class="btn" style="background:var(--secondary-color); color:var(--text-main);"
+                    onclick="refreshRoster()">Refresh</button>
+            <button class="btn" style="background:var(--danger);" onclick="finaliseSession()">Finalise class</button>
+        </div>
+    </div>
+
+    <div style="overflow-x:auto; margin-top:1.5rem;">
+        <table class="roster">
+            <thead>
+                <tr>
+                    <th>Student</th><th>In room</th><th>Coverage</th>
+                    <th>Minutes</th><th>First seen</th><th>Last seen</th><th>Status</th><th>Override</th>
+                </tr>
+            </thead>
+            <tbody id="rosterBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+    let currentSession = null;
+    let refreshTimer = null;
+
+    const STATUSES = ['Present', 'Late', 'Partial', 'Absent', 'On Leave'];
+
+    function badgeClass(status) {
+        if (status === 'Present') return 'badge-success';
+        if (status === 'Late') return 'badge-warning';
+        if (status === 'Partial') return 'badge-primary';
+        if (status === 'On Leave') return 'badge-primary';
+        return 'badge-danger';
+    }
+
+    function barColour(pct) {
+        if (pct >= 75) return 'var(--success)';
+        if (pct >= 40) return 'var(--warning)';
+        return 'var(--danger)';
+    }
+
+    function openSession(id, subject) {
+        currentSession = id;
+        document.getElementById('rosterCard').style.display = 'block';
+        document.getElementById('rosterTitle').innerText = subject;
+        refreshRoster();
+        if (refreshTimer) clearInterval(refreshTimer);
+        refreshTimer = setInterval(refreshRoster, 20000);
+        document.getElementById('rosterCard').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    async function refreshRoster() {
+        if (!currentSession) return;
+        const res = await fetch(`/api/session/${currentSession}/live`);
+        if (!res.ok) return;
+        const data = await res.json();
+        renderRoster(data);
+    }
+
+    function renderRoster(data) {
+        document.getElementById('rosterSummary').innerText =
+            `${data.present_now} of ${data.roster} in the room now`;
+
+        const body = document.getElementById('rosterBody');
+        body.innerHTML = '';
+
+        data.students.forEach(s => {
+            const options = STATUSES.map(st =>
+                `<option value="${st}" ${st === s.status ? 'selected' : ''}>${st}</option>`).join('');
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${s.name}</strong></td>
+                <td class="${s.in_room ? 'in-room' : 'out-room'}">${s.in_room ? 'Yes' : 'No'}</td>
+                <td>
+                    <div class="bar"><span style="width:${Math.min(s.coverage_pct, 100)}%;
+                        background:${barColour(s.coverage_pct)};"></span></div>
+                    <small class="num">${s.coverage_pct}%</small>
+                </td>
+                <td class="num">${Math.round(s.present_seconds / 60)}m</td>
+                <td class="num">${s.first_seen ? s.first_seen.substring(11, 16) : '—'}</td>
+                <td class="num">${s.last_seen ? s.last_seen.substring(11, 16) : '—'}</td>
+                <td><span class="badge ${badgeClass(s.status)}">${s.status}</span></td>
+                <td>
+                    <select class="override-select" onchange="override(${s.student_id}, this.value)">
+                        ${options}
+                    </select>
+                </td>`;
+            body.appendChild(tr);
+        });
+    }
+
+    async function override(studentId, status) {
+        const res = await fetch(`/api/session/${currentSession}/override`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ student_id: studentId, status: status })
+        });
+        if (res.ok) {
+            Swal.fire({ icon: 'success', title: 'Updated', text: `Marked ${status}.`,
+                        timer: 1400, showConfirmButton: false });
+        }
+    }
+
+    async function finaliseSession() {
+        const confirmed = await Swal.fire({
+            icon: 'question', title: 'Finalise this class?',
+            text: 'Every enrolled student gets a verdict now, including those never seen.',
+            showCancelButton: true, confirmButtonText: 'Finalise'
+        });
+        if (!confirmed.isConfirmed) return;
+
+        const res = await fetch(`/api/session/${currentSession}/close`, { method: 'POST' });
+        const summary = await res.json();
+        Swal.fire({
+            icon: 'success', title: 'Class finalised',
+            html: `<b>${summary.Present}</b> present · <b>${summary.Late}</b> late ·
+                   <b>${summary.Partial}</b> partial · <b>${summary.Absent}</b> absent`
+        });
+        refreshRoster();
+    }
+
+    // Live updates pushed by the attendance engine
+    const socket = io();
+    socket.on('session_progress', (data) => {
+        if (data.session_id === currentSession) renderRoster(data);
+    });
+    socket.on('session_closed', (summary) => {
+        if (summary.session_id === currentSession) refreshRoster();
+    });
+
+    {% if live_session_id %}
+    openSession({{ live_session_id }}, 'Live class');
+    {% endif %}
+</script>
+{% endblock %}

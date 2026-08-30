@@ -15,7 +15,8 @@
     </div>
 
     <form action="/manual_attendance" method="POST">
-        <div style="display: flex; gap: 1.5rem; margin-bottom: 1.5rem;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <div class="split" style="gap: 1.5rem; margin-bottom: 1.5rem;">
             <div class="form-group" style="flex: 1;">
                 <label>Institutional Course</label>
                 <select id="courseFilter" onchange="filterStudents()" required>

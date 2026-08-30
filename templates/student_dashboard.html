@@ -6,7 +6,50 @@
     <p>Welcome, {{ session.get('full_name') }}</p>
 </header>
 
-<div style="display: flex; gap: 1.5rem; margin-bottom: 2.5rem;">
+<style>
+    .subject-row { padding: 1.1rem 0; border-bottom: 1px solid var(--border-color); }
+    .subject-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .subject-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+    .subject-name { font-weight: 700; }
+    .subject-pct { font-weight: 800; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+    .is-risk { color: var(--danger); }
+
+    .subject-bar { position: relative; height: 9px; border-radius: 5px; background: var(--secondary-color);
+        overflow: hidden; margin: 0.55rem 0 0.5rem; }
+    .subject-bar > span { display: block; height: 100%; border-radius: 5px; transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1); }
+    /* The requirement drawn on the bar - a percentage means more next to the
+       line it has to clear. */
+    .subject-mark { position: absolute; top: -3px; bottom: -3px; left: 75%; width: 2px;
+        background: var(--text-muted); opacity: 0.55; border-radius: 1px; }
+
+    .subject-foot { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+        flex-wrap: wrap; font-size: 0.8rem; color: var(--text-muted); }
+
+    .class-row { display: flex; align-items: center; gap: 1rem; padding: 0.85rem 0;
+        border-bottom: 1px solid var(--border-color); }
+    .class-row:last-child { border-bottom: none; }
+    .class-time { font-weight: 800; font-variant-numeric: tabular-nums; font-size: 0.85rem; min-width: 5.5rem; }
+    .class-name { flex: 1; min-width: 0; font-weight: 600; }
+    .class-cover { font-size: 0.78rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.4rem; text-align: center; }
+    .cal-cell { aspect-ratio: 1; border-radius: 8px; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 600;
+        background: var(--secondary-color); color: var(--text-muted); transition: var(--transition-all); }
+    .cal-cell.has-data { color: var(--text-main); cursor: default; }
+    .cal-cell.has-data:hover { transform: scale(1.08); box-shadow: var(--shadow-md); }
+    .cal-cell.blank { background: transparent; }
+    .cal-dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 3px; }
+    .cal-nav { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border-color);
+        background: var(--card-bg); color: var(--text-main); cursor: pointer; font-weight: 800;
+        transition: var(--transition-all); }
+    .cal-nav:hover { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+    .cal-legend { display: flex; gap: 1.25rem; flex-wrap: wrap; margin-top: 1.25rem;
+        font-size: 0.72rem; color: var(--text-muted); }
+    .cal-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.35rem; }
+</style>
+
+<div class="metric-row">
     <div class="card" style="flex: 1; text-align: center; border-left: 6px solid var(--primary-color);">
         <h3 style="margin: 0; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase;">Attendance %</h3>
         <p class="stat-value" style="color: var(--text-main);">{{ stats.percentage }}%</p>
@@ -25,7 +68,7 @@
     </div>
 </div>
 
-<div style="display: flex; gap: 2.5rem;">
+<div class="split" style="gap: 2.5rem;">
     <!-- Left Column -->
     <div style="flex: 1.5; display: flex; flex-direction: column; gap: 2rem;">
         
@@ -51,6 +94,92 @@
                         No active notices.
                     </div>
                 {% endif %}
+            </div>
+        </div>
+
+        <!-- Today, class by class -->
+        <div class="card">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+                <h3 style="margin:0;">Today's classes</h3>
+                <span id="todayDate" style="font-size:0.8rem; color:var(--text-muted);">{{ today }}</span>
+            </div>
+            <div id="todayList" style="margin-top:1.5rem;">
+                <p style="color:var(--text-muted); font-size:0.9rem;">Loading your timetable&hellip;</p>
+            </div>
+        </div>
+
+        <!-- Standing per subject, with the number that actually matters -->
+        <div class="card">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+                <div>
+                    <h3 style="margin:0;">Where you stand</h3>
+                    <p style="margin:0.3rem 0 0; font-size:0.85rem; color:var(--text-muted);">
+                        Every subject against the {{ institution.attendance_required_pct|int }}% requirement.
+                    </p>
+                </div>
+                <a href="/student/export" class="btn"
+                   style="background:var(--secondary-color); color:var(--text-main); box-shadow:none; padding:0.6rem 1.2rem; font-size:0.85rem;">
+                    Export CSV
+                </a>
+            </div>
+
+            {% if subjects %}
+            <div style="margin-top:1.75rem;">
+                {% for s in subjects %}
+                <div class="subject-row">
+                    <div class="subject-head">
+                        <span class="subject-name">{{ s.subject }}</span>
+                        <span class="subject-pct {% if s.at_risk %}is-risk{% endif %}">{{ s.percentage }}%</span>
+                    </div>
+
+                    <div class="subject-bar">
+                        <span style="width: {{ [s.percentage, 100]|min }}%;
+                                     background: {% if s.at_risk %}var(--danger){% elif s.can_miss == 0 %}var(--warning){% else %}var(--success){% endif %};"></span>
+                        <i class="subject-mark" title="75% required"></i>
+                    </div>
+
+                    <div class="subject-foot">
+                        <span>{{ s.credited }} of {{ s.held }} attended</span>
+                        {% if s.must_attend %}
+                            <strong class="is-risk">
+                                Attend the next {{ s.must_attend }} to get back to 75%
+                            </strong>
+                        {% elif s.can_miss %}
+                            <strong style="color: var(--success);">
+                                You can miss {{ s.can_miss }} more
+                            </strong>
+                        {% else %}
+                            <strong style="color: var(--warning);">
+                                Exactly on the line &mdash; miss one and you drop below
+                            </strong>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p style="color:var(--text-muted); margin-top:1.5rem;">
+                Nothing recorded yet. Your standing appears here once your first class is finalised.
+            </p>
+            {% endif %}
+        </div>
+
+        <!-- Month view -->
+        <div class="card">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+                <h3 style="margin:0;" id="calTitle">This month</h3>
+                <div style="display:flex; gap:0.4rem;">
+                    <button class="cal-nav" onclick="shiftMonth(-1)" aria-label="Previous month">&larr;</button>
+                    <button class="cal-nav" onclick="shiftMonth(1)" aria-label="Next month">&rarr;</button>
+                </div>
+            </div>
+            <div class="cal-grid" id="calHeader" style="margin-top:1.5rem; color:var(--text-muted); font-size:0.7rem; font-weight:800; letter-spacing:0.08em;"></div>
+            <div class="cal-grid" id="calBody" style="margin-top:0.4rem;"></div>
+            <div class="cal-legend">
+                <span><i style="background:var(--success);"></i> 75% and above</span>
+                <span><i style="background:var(--warning);"></i> Below 75%</span>
+                <span><i style="background:var(--danger);"></i> Below 40%</span>
+                <span><i style="background:var(--border-color);"></i> No classes</span>
             </div>
         </div>
 
@@ -98,7 +227,7 @@
                     <span style="font-size: 1.2rem;">📍</span> Campus Geo-Fence
                 </h3>
                 <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem;">
-                    You must be within the 300m campus perimeter to authorize attendance.
+                    You must be within {{ institution.geofence_radius_m|int }}m of campus to check in.
                 </p>
             </div>
             
@@ -138,6 +267,7 @@
         <div class="card">
             <h3>Apply for Leave</h3>
             <form action="/apply_leave" method="POST" style="margin-top: 1rem;">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <div class="form-group">
                     <label>Start Date</label>
                     <input type="date" name="start_date" required>
@@ -176,9 +306,10 @@
 <script>
 // Enterprise Geo-Fencing Map Logic
 let map, userMarker, campusCircle;
-const CAMPUS_LAT = 17.4300;
-const CAMPUS_LON = 78.4480;
-const ALLOWED_RADIUS = 300; // meters
+// Set by the administrator in the control room - one source, not a copy.
+const CAMPUS_LAT = {{ institution.campus_lat }};
+const CAMPUS_LON = {{ institution.campus_lon }};
+const ALLOWED_RADIUS = {{ institution.geofence_radius_m|int }};
 
 document.addEventListener("DOMContentLoaded", function() {
     if (!navigator.geolocation) {
@@ -206,7 +337,7 @@ document.addEventListener("DOMContentLoaded", function() {
     }).addTo(map);
 
     // Campus Icon
-    L.marker([CAMPUS_LAT, CAMPUS_LON]).addTo(map).bindPopup("<b>Institution Campus</b>").openPopup();
+    L.marker([CAMPUS_LAT, CAMPUS_LON]).addTo(map).bindPopup("<b>{{ institution.institution_short }}</b>").openPopup();
 
     // Get User Location
     navigator.geolocation.getCurrentPosition(
@@ -309,5 +440,108 @@ function requestMobileCheckin() {
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
 }
+</script>
+
+<script>
+// --- Today's classes ---------------------------------------------------------
+
+function statusBadge(status) {
+    const map = { Present: 'badge-success', Late: 'badge-warning', Partial: 'badge-primary',
+                  'On Leave': 'badge-primary', Scheduled: 'badge-primary' };
+    return map[status] || 'badge-danger';
+}
+
+async function loadToday() {
+    const list = document.getElementById('todayList');
+    const res = await fetch('/student/day');
+    if (!res.ok) {
+        list.innerHTML = '<p style="color:var(--text-muted); font-size:0.9rem;">Could not load today\'s classes.</p>';
+        return;
+    }
+
+    const { classes } = await res.json();
+    if (!classes.length) {
+        list.innerHTML = '<p style="color:var(--text-muted); font-size:0.9rem;">' +
+            'Nothing on your timetable today. Enjoy it.</p>';
+        return;
+    }
+
+    list.innerHTML = classes.map(c => {
+        // A class still running has no verdict yet, so show progress instead.
+        const pending = c.status === 'Scheduled';
+        const detail = pending
+            ? 'not finalised yet'
+            : `${c.coverage_pct}% of the class`;
+        return `
+            <div class="class-row">
+                <span class="class-time">${c.start}&ndash;${c.end}</span>
+                <span class="class-name">${c.subject}</span>
+                <span class="class-cover">${detail}</span>
+                <span class="badge ${statusBadge(c.status)}">${c.status}</span>
+            </div>`;
+    }).join('');
+}
+
+// --- Month calendar ----------------------------------------------------------
+
+let calCursor = new Date();
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function iso(date) {
+    return date.getFullYear() + '-' +
+        String(date.getMonth() + 1).padStart(2, '0') + '-' +
+        String(date.getDate()).padStart(2, '0');
+}
+
+function dayColour(entry) {
+    if (!entry || !entry.total) return 'var(--border-color)';
+    if (entry.pct >= 75) return 'var(--success)';
+    if (entry.pct >= 40) return 'var(--warning)';
+    return 'var(--danger)';
+}
+
+function shiftMonth(delta) {
+    calCursor.setMonth(calCursor.getMonth() + delta);
+    loadCalendar();
+}
+
+async function loadCalendar() {
+    const year = calCursor.getFullYear();
+    const month = calCursor.getMonth();
+    const first = new Date(year, month, 1);
+    const last = new Date(year, month + 1, 0);
+
+    document.getElementById('calTitle').innerText =
+        first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+
+    document.getElementById('calHeader').innerHTML =
+        WEEKDAYS.map(d => `<div>${d}</div>`).join('');
+
+    const res = await fetch(`/student/calendar?start=${iso(first)}&end=${iso(last)}`);
+    const days = res.ok ? (await res.json()).days : {};
+
+    // getDay() is Sunday-first; the grid is Monday-first.
+    const offset = (first.getDay() + 6) % 7;
+    const cells = Array(offset).fill('<div class="cal-cell blank"></div>');
+
+    for (let d = 1; d <= last.getDate(); d++) {
+        const key = iso(new Date(year, month, d));
+        const entry = days[key];
+        const title = entry && entry.total
+            ? `${entry.pct}% across ${entry.total} class(es)`
+            : 'No classes recorded';
+        cells.push(`
+            <div class="cal-cell ${entry ? 'has-data' : ''}" title="${title}">
+                <span>${d}</span>
+                <i class="cal-dot" style="background:${dayColour(entry)};"></i>
+            </div>`);
+    }
+
+    document.getElementById('calBody').innerHTML = cells.join('');
+}
+
+loadToday();
+loadCalendar();
 </script>
 {% endblock %}

@@ -20,6 +20,9 @@ env/
 .deepface/
 weights/
 
+# Private biometric media (face crops, profile photos, generated ID cards)
+private_media/
+
 # Reports & Static Captures (Keep the folders, ignore the files)
 reports/*
 !reports/.gitkeep
@@ -31,3 +34,7 @@ static/profiles/*
 # IDE Settings
 .vscode/
 .idea/
+
+# SQLite WAL sidecar files
+*.db-wal
+*.db-shm

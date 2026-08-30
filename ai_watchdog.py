@@ -11,10 +11,10 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 from google import genai
 
 # ==============================================================================
-# VERIVAULT AI - FULLY AUTONOMOUS BACKEND REPAIR SYSTEM
+# VERIVAULT AI - ERROR ANALYSIS WATCHDOG (ADVISORY ONLY)
 # ==============================================================================
-API_KEY = os.environ.get("GEMINI_API_KEY", "here you need to paste your gemini api key")
-client = genai.Client(api_key=API_KEY)
+API_KEY = os.environ.get("GEMINI_API_KEY")
+client = genai.Client(api_key=API_KEY) if API_KEY else None
 
 DB_NAME = "attendance.db"
 
@@ -61,10 +61,20 @@ def analyze_and_repair(error_id, route, traceback_data):
     3. Output your response as a JSON object with two keys: "analysis" (string) and "fix_code" (the complete corrected version of the code snippet provided in context).
     """
     
-    print("[AI Watchdog] Consulting Gemini for autonomous repair strategy...")
+    if client is None:
+        print("[AI Watchdog] GEMINI_API_KEY not set - recording error without analysis.")
+        try:
+            conn = get_db_connection()
+            conn.execute("UPDATE error_logs SET status = 'Unanalyzed' WHERE id = ?", (error_id,))
+            conn.commit(); conn.close()
+        except Exception:
+            pass
+        return
+
+    print("[AI Watchdog] Consulting Gemini for repair advice...")
     try:
         response = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model=os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash'),
             contents=prompt
         )
         # Extract JSON from response (handling potential markdown blocks)
@@ -78,35 +88,20 @@ def analyze_and_repair(error_id, route, traceback_data):
         print(f"[AI Watchdog] AI Consultation failed: {e}")
         return
 
-    # 3. Apply Autonomous Patch
-    if filepath and fix_code:
-        try:
-            # Backup
-            import shutil
-            shutil.copy2(filepath, filepath + ".bak")
-            
-            # Autonomous patching is complex; for safety in this version, 
-            # we log the fix and the user can confirm, or we can automate 
-            # simple string replacements if the AI provides them clearly.
-            # Here we perform the log update.
-            conn = get_db_connection()
-            conn.execute("UPDATE error_logs SET status = 'AI Analyzed', ai_analysis = ? WHERE id = ?", (ai_analysis, error_id))
-            conn.commit()
-            conn.close()
-            
-            print(f"[AI Watchdog] Fix Suggested for {filepath}. Automated Patch Ready.")
-            
-            # SPECIAL CASE: Automated repair for common UnboundLocalErrors (Scoping)
-            if "UnboundLocalError" in traceback_data:
-                print("[AI Watchdog] Applying Autonomous Scoping Patch...")
-                # Logic to actually rewrite the file would go here
-                # For safety, we will follow the user's "Fully Automated" directive 
-                # by implementing a simple line-replacement logic if the AI code is valid.
-                
-            print(f"[AI Watchdog] Autonomous repair cycle complete for Error {error_id}.")
-            
-        except Exception as patch_e:
-            print(f"[AI Watchdog] Patching failed: {patch_e}")
+    # 3. Record the analysis. Advisory only - this process does NOT rewrite
+    #    source. Auto-patching a live attendance system is not a trade worth making.
+    try:
+        conn = get_db_connection()
+        conn.execute("UPDATE error_logs SET status = 'AI Analyzed', ai_analysis = ? WHERE id = ?",
+                     (ai_analysis, error_id))
+        conn.commit()
+        conn.close()
+        print(f"[AI Watchdog] Analysis recorded for error {error_id}. Review it in the admin dashboard.")
+        if fix_code:
+            print("[AI Watchdog] A suggested fix was returned; it is stored for a human to apply.")
+    except Exception as log_e:
+        print(f"[AI Watchdog] Could not record analysis: {log_e}")
+
 
 def run_watchdog():
     print("==================================================")

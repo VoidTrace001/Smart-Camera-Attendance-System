@@ -1,4 +1,5 @@
 import os
+from database import MEDIA_ROOT
 from reportlab.lib.pagesizes import A6
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
@@ -23,13 +24,15 @@ def generate_id_card(student_data, output_path):
         c.drawImage(logo_path, 5*mm, height - 20*mm, width=40*mm, preserveAspectRatio=True, mask='auto')
     else:
         c.setFillColorRGB(1, 1, 1)
+        from settings import get_settings
+        institution = get_settings()
         c.setFont("Helvetica-Bold", 14)
-        c.drawString(10*mm, height - 15*mm, "ETHAMES")
+        c.drawString(10*mm, height - 15*mm, institution['institution_short'].upper())
         c.setFont("Helvetica", 8)
-        c.drawString(10*mm, height - 20*mm, "BUSINESS SCHOOL")
+        c.drawString(10*mm, height - 20*mm, institution['institution_name'][:32])
 
     # Student Photo
-    photo_path = os.path.join('static', 'profiles', f"student_{student_data['id']}.jpg")
+    photo_path = os.path.join(MEDIA_ROOT, 'profiles', f"student_{student_data['id']}.jpg")
     if os.path.exists(photo_path):
         c.setStrokeColorRGB(1, 1, 1)
         c.setLineWidth(2)
@@ -57,7 +60,7 @@ def generate_id_card(student_data, output_path):
     qr.make(fit=True)
     qr_img = qr.make_image(fill_color="black", back_color="white")
     
-    qr_temp_path = f"static/profiles/temp_qr_{student_data['id']}.png"
+    qr_temp_path = os.path.join(MEDIA_ROOT, 'profiles', f"temp_qr_{student_data['id']}.png")
     qr_img.save(qr_temp_path)
     
     c.drawImage(qr_temp_path, width - 35*mm, 10*mm, width=25*mm, height=25*mm)

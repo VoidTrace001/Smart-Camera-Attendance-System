@@ -15,3 +15,5 @@ tf-keras
 gunicorn
 psycopg2-binary
 pywin32;platform_system=="Windows"
+redis
+celery

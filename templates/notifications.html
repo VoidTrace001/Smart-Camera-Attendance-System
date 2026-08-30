@@ -1,0 +1,109 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Notifications</h1>
+    <p>What the system sent, what it could not send, and why.</p>
+</header>
+
+<style>
+    .channel-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 1.25rem; margin-bottom: 2.5rem; }
+    .channel { padding: 1.5rem; }
+    .channel h3 { margin: 0 0 0.2rem; font-size: 0.75rem; text-transform: uppercase;
+        letter-spacing: 0.12em; color: var(--text-muted); }
+    .channel-state { font-size: 0.8rem; font-weight: 700; margin-bottom: 1rem; }
+    .channel-counts { display: flex; gap: 1.25rem; font-variant-numeric: tabular-nums; }
+    .channel-counts div { text-align: left; }
+    .channel-counts b { display: block; font-size: 1.5rem; font-weight: 800; line-height: 1.1; }
+    .channel-counts span { font-size: 0.72rem; color: var(--text-muted); }
+
+    .notif-detail { font-size: 0.78rem; color: var(--text-muted); max-width: 46ch;
+        overflow-wrap: anywhere; }
+    .notif-when { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-muted); }
+    .empty { text-align: center; padding: 3rem 1rem; color: var(--text-muted); }
+    .setup { background: var(--secondary-color); border-left: 4px solid var(--warning);
+        padding: 1.25rem 1.5rem; border-radius: var(--radius-md); margin-bottom: 2rem; }
+    .setup code { background: var(--card-bg); padding: 0.1rem 0.4rem; border-radius: 4px;
+        font-size: 0.82rem; }
+</style>
+
+{% if not email_ready or not sms_ready %}
+<div class="setup">
+    <strong style="display:block; margin-bottom:0.5rem;">Some channels are not configured yet.</strong>
+    <div style="font-size:0.88rem; color:var(--text-muted); line-height:1.7;">
+        {% if not email_ready %}
+        Email needs <code>SMTP_HOST</code>, <code>SMTP_USER</code> and <code>SMTP_PASSWORD</code> in your
+        <code>.env</code>. Most providers require an app password rather than the account password.<br>
+        {% endif %}
+        {% if not sms_ready %}
+        WhatsApp and SMS need <code>TWILIO_ACCOUNT_SID</code> and <code>TWILIO_AUTH_TOKEN</code>.
+        {% endif %}
+        <br>Until then, messages are recorded below as <em>skipped</em> rather than being
+        reported as delivered.
+    </div>
+</div>
+{% endif %}
+
+<div class="channel-row">
+    {% for channel in ['email', 'whatsapp', 'sms'] %}
+    {% set counts = summary.get(channel, {}) %}
+    <div class="card channel">
+        <h3>{{ channel }}</h3>
+        <div class="channel-state" style="color: {% if channel == 'email' and email_ready %}var(--success){% elif channel != 'email' and sms_ready %}var(--success){% else %}var(--text-muted){% endif %};">
+            {% if channel == 'email' %}
+                {{ 'Configured' if email_ready else 'Not configured' }}
+            {% else %}
+                {{ 'Configured' if sms_ready else 'Not configured' }}
+            {% endif %}
+        </div>
+        <div class="channel-counts">
+            <div><b style="color:var(--success);">{{ counts.get('sent', 0) }}</b><span>sent</span></div>
+            <div><b style="color:var(--danger);">{{ counts.get('failed', 0) }}</b><span>failed</span></div>
+            <div><b style="color:var(--text-muted);">{{ counts.get('skipped', 0) }}</b><span>skipped</span></div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="card">
+    <h2 style="margin:0;">Delivery log</h2>
+    <p style="margin:0.3rem 0 1.75rem; color:var(--text-muted); font-size:0.9rem;">
+        The 300 most recent messages. Counts above cover the last 7 days.
+    </p>
+
+    <div style="overflow-x:auto;">
+        {% if entries %}
+        <table class="datatable">
+            <thead>
+                <tr><th>When</th><th>Channel</th><th>To</th><th>Message</th><th>Result</th><th>Detail</th></tr>
+            </thead>
+            <tbody>
+                {% for e in entries %}
+                <tr>
+                    <td class="notif-when">{{ e.sent_at }}</td>
+                    <td>{{ e.channel }}</td>
+                    <td style="font-size:0.85rem;">{{ e.recipient }}</td>
+                    <td style="font-size:0.85rem;">{{ e.summary }}</td>
+                    <td>
+                        <span class="badge {% if e.status == 'sent' %}badge-success{% elif e.status == 'failed' %}badge-danger{% else %}badge-warning{% endif %}">
+                            {{ e.status }}
+                        </span>
+                    </td>
+                    <td class="notif-detail">{{ e.detail or '' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty">
+            <p style="margin:0 0 0.5rem; font-weight:700;">Nothing sent yet.</p>
+            <p style="margin:0; font-size:0.9rem;">
+                Messages appear here as soon as attendance is recorded for a student
+                whose contact details are on file.
+            </p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

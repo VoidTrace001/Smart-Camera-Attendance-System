@@ -2,31 +2,37 @@ import os
 from datetime import datetime
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from database import get_all_students, get_student_stats, get_student_attendance_history, delete_student, mark_attendance, get_db_connection
+from database import get_all_students, get_student_stats, get_student_attendance_history, delete_student
 
-def daily_attendance_reset():
-    """Automated Daily Absentee Marking: Marks students as 'Absent' if they haven't checked in by EOD."""
-    print("[SCHEDULER] Running Daily Absentee Marking...")
-    students = get_all_students()
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    marked_count = 0
-    for s in students:
-        # Check if student already has a record for today
-        # Note: In a real system, we'd check if today is a holiday or Sunday
-        if datetime.now().weekday() < 5: # Monday to Friday only
-            cursor.execute('SELECT id FROM attendance WHERE student_id = ? AND date = ?', (s['id'], today))
-            if not cursor.fetchone():
-                # No attendance record found, mark as Absent
-                mark_attendance(s['id'], role='Student', status='Absent', override_subject="Automated EOD System")
-                marked_count += 1
-            
-    conn.close()
-    print(f"[SCHEDULER] Daily Reset complete. Marked {marked_count} students as Absent.")
-from email_service import send_attendance_email_async
+def materialize_tomorrow():
+    """Creates concrete class_sessions from the timetable for the coming day.
+
+    Per-class absence is decided by attendance_engine.py when each session
+    closes, so there is no end-of-day sweep any more - the old one wrote a
+    single day-level Absent row per student regardless of their timetable.
+    """
+    from presence import materialize_sessions
+    from datetime import timedelta
+    tomorrow = (datetime.now() + timedelta(days=1)).date()
+    created = materialize_sessions(tomorrow)
+    print(f"[SCHEDULER] Materialised {created} class session(s) for {tomorrow}.")
+
+
+def purge_expired_sightings():
+    """Retention: raw sightings are evidence, not a permanent record."""
+    from presence import purge_old_sightings
+    removed = purge_old_sightings()
+    print(f"[SCHEDULER] Purged {removed} expired sighting(s).")
+
+
+def close_stale_sessions():
+    """Safety net: finalise any session the engine missed (e.g. it was down)."""
+    from presence import sessions_due_for_close, close_session
+    for session_id in sessions_due_for_close():
+        summary = close_session(session_id)
+        print(f"[SCHEDULER] Recovered unclosed session {session_id}: {summary}")
+
+
 from ai_services import predict_dropout_risk
 from notification_hub import send_whatsapp_alert
 
@@ -80,7 +86,9 @@ def generate_warning_pdf(student_name, course, percentage, filename):
 
     # Header
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, height - 50, "EThames Business School - Attendance Warning")
+    from settings import get_settings
+    institution = get_settings()['institution_name']
+    c.drawString(50, height - 50, f"{institution} - Attendance Warning")
     
     c.setLineWidth(2)
     c.line(50, height - 60, width - 50, height - 60)
@@ -128,8 +136,14 @@ def init_scheduler(app):
     from apscheduler.schedulers.background import BackgroundScheduler
     scheduler = BackgroundScheduler()
     
-    # Run Daily Absentee Marking at 6 PM (18:00) on weekdays
-    scheduler.add_job(func=daily_attendance_reset, trigger="cron", day_of_week='mon-fri', hour=18, minute=0)
+    # Build tomorrow's class sessions just after midnight
+    scheduler.add_job(func=materialize_tomorrow, trigger="cron", hour=0, minute=5)
+
+    # Safety net for sessions the engine did not finalise
+    scheduler.add_job(func=close_stale_sessions, trigger="cron", minute='*/30')
+
+    # Retention sweep for raw sightings
+    scheduler.add_job(func=purge_expired_sightings, trigger="cron", hour=3, minute=30)
     
     # Run every Friday at 17:00 (5 PM)
     scheduler.add_job(func=check_defaulters_and_warn, trigger="cron", day_of_week='fri', hour=17, minute=0)

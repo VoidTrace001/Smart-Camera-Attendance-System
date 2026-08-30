@@ -16,6 +16,7 @@
     </div>
 
     <form action="/register_face" method="POST" enctype="multipart/form-data">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <div class="form-group photo-upload">
             <label for="photo">Click to Select Front-Facing Photo</label>
             <input type="file" id="photo" name="photo" accept="image/*" required>

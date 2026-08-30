@@ -1,76 +1,138 @@
+"""
+Outbound email.
+
+This used to print "[MOCK EMAIL SUCCESS]" and return, with the SMTP calls
+commented out and a placeholder password in the source. Nothing was ever sent,
+and every caller was told it had been.
+
+Now it sends. If SMTP is not configured it says so and records the attempt as
+skipped rather than claiming success — a notification system that lies about
+delivery is worse than one that does nothing.
+
+Configure in .env:
+
+    SMTP_HOST=smtp.office365.com
+    SMTP_PORT=587
+    SMTP_USER=attendance@yourcollege.edu
+    SMTP_PASSWORD=an-app-password
+    SMTP_FROM="College Attendance <attendance@yourcollege.edu>"
+    SMTP_SECURITY=starttls        # starttls | ssl | none
+"""
+import logging
+import os
 import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import threading
-from datetime import datetime
-from twilio.rest import Client
+from email.message import EmailMessage
+from email.utils import formataddr, formatdate
 
-# --- Email Config ---
-SMTP_SERVER = "smtp.office365.com"
-SMTP_PORT = 587
-SENDER_EMAIL = "your_email@outlook.com"
-SENDER_PASSWORD = "your_password"
+logger = logging.getLogger('VeriVaultAI')
 
-# --- Twilio WhatsApp Config ---
-TWILIO_ACCOUNT_SID = 'your_account_sid'
-TWILIO_AUTH_TOKEN = 'your_auth_token'
-TWILIO_WHATSAPP_NUMBER = 'whatsapp:+14155238886' # Twilio Sandbox Number
+SMTP_HOST = os.environ.get('SMTP_HOST', '')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USER = os.environ.get('SMTP_USER', '')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+SMTP_SECURITY = os.environ.get('SMTP_SECURITY', 'starttls').lower()
+SMTP_TIMEOUT = int(os.environ.get('SMTP_TIMEOUT', '20'))
 
-def send_whatsapp_async(parent_phone, student_name, subject, status, time_in):
-    def send():
-        if not parent_phone: return
-        
-        # Format the number for WhatsApp (e.g. whatsapp:+919876543210)
-        formatted_phone = f"whatsapp:{parent_phone}" if not parent_phone.startswith("whatsapp:") else parent_phone
-        
-        message_body = f"✅ Smart Attendance Alert\n\n{student_name} has been marked '{status}' for {subject} at {time_in}."
-        
-        print(f"Attempting to send WhatsApp to {formatted_phone}...")
-        try:
-            # Uncomment below to actually send when you add your real Twilio API Keys
-            # client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-            # message = client.messages.create(
-            #     from_=TWILIO_WHATSAPP_NUMBER,
-            #     body=message_body,
-            #     to=formatted_phone
-            # )
-            print(f"[MOCK WHATSAPP SUCCESS] Message sent to {formatted_phone}")
-        except Exception as e:
-            print(f"[WHATSAPP ERROR] Failed: {e}")
+_DEFAULT_FROM = SMTP_FROM = os.environ.get('SMTP_FROM') or SMTP_USER
 
-    threading.Thread(target=send, daemon=True).start()
+
+def is_configured():
+    return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
+
+
+def _normalise(recipients):
+    if isinstance(recipients, str):
+        recipients = [recipients]
+    seen, out = set(), []
+    for address in recipients or []:
+        address = (address or '').strip()
+        if address and '@' in address and address.lower() not in seen:
+            seen.add(address.lower())
+            out.append(address)
+    return out
+
+
+def send_email(recipients, subject, body, html=None):
+    """Sends one message. Returns (sent, detail). Blocking - see the _async wrappers."""
+    from notification_hub import record_notification
+
+    recipients = _normalise(recipients)
+    if not recipients:
+        return False, "No valid recipient address"
+
+    if not is_configured():
+        detail = "SMTP is not configured (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)"
+        logger.warning(f"Email to {recipients} skipped: {detail}")
+        record_notification('email', ', '.join(recipients), subject, 'skipped', detail)
+        return False, detail
+
+    message = EmailMessage()
+    message['Subject'] = subject
+    message['From'] = _DEFAULT_FROM if '<' in _DEFAULT_FROM else formataddr(('Attendance', _DEFAULT_FROM))
+    message['To'] = ', '.join(recipients)
+    message['Date'] = formatdate(localtime=True)
+    message.set_content(body)
+    if html:
+        message.add_alternative(html, subtype='html')
+
+    try:
+        if SMTP_SECURITY == 'ssl':
+            server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
+        else:
+            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT)
+
+        with server:
+            if SMTP_SECURITY == 'starttls':
+                server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(message)
+
+        logger.info(f"Email sent to {recipients}: {subject}")
+        record_notification('email', ', '.join(recipients), subject, 'sent', None)
+        return True, "sent"
+
+    except smtplib.SMTPAuthenticationError as e:
+        detail = f"SMTP rejected the login ({e.smtp_code}). App passwords are usually required."
+    except smtplib.SMTPRecipientsRefused:
+        detail = "Every recipient address was refused by the server"
+    except Exception as e:
+        detail = f"{type(e).__name__}: {e}"
+
+    logger.error(f"Email to {recipients} failed: {detail}")
+    record_notification('email', ', '.join(recipients), subject, 'failed', detail)
+    return False, detail
+
+
+def _in_background(fn, *args):
+    threading.Thread(target=fn, args=args, daemon=True).start()
+
 
 def send_attendance_email_async(recipient_emails, student_name, subject, status, time_in):
-    def send():
-        if not recipient_emails: return
-        
-        if isinstance(recipient_emails, str):
-            recipient_emails = [recipient_emails]
-            
-        print(f"Attempting to send attendance email to {recipient_emails}...")
-        
-        msg = MIMEMultipart()
-        msg['From'] = SENDER_EMAIL
-        msg['To'] = ", ".join(recipient_emails)
-        msg['Subject'] = f"Attendance Update: {student_name} - {subject}"
-        
-        body = f"""
-        Hello,
-        
-        Attendance for {student_name} for the subject '{subject}' has been marked as {status} on {datetime.now().strftime('%Y-%m-%d')} at {time_in}.
-        
-        This is an automated notification from EThames Business School Smart Attendance System.
-        """
-        msg.attach(MIMEText(body, 'plain'))
-        
-        try:
-            # server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-            # server.starttls()
-            # server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            # server.send_message(msg)
-            # server.quit()
-            print(f"[MOCK EMAIL SUCCESS] Email sent to {recipient_emails}")
-        except Exception as e:
-            print(f"[EMAIL ERROR] Failed to send email: {e}")
+    """Tells a student and their parent that attendance was recorded."""
+    from settings import get_settings
+    institution = get_settings()['institution_name']
 
-    threading.Thread(target=send, daemon=True).start()
+    line = f"{student_name} was marked {status} for {subject}"
+    if time_in and time_in != 'N/A':
+        line += f" at {time_in}"
+
+    body = (
+        f"Hello,\n\n{line}.\n\n"
+        f"You can see the full record, class by class, by signing in to the "
+        f"{institution} attendance portal.\n\n"
+        f"This message was sent automatically. Please do not reply to it.\n"
+    )
+    _in_background(send_email, recipient_emails,
+                   f"Attendance update: {student_name} - {subject}", body)
+
+
+def send_whatsapp_async(parent_phone, student_name, subject, status, time_in):
+    """Kept for callers that predate notification_hub; delegates to the real sender."""
+    from notification_hub import send_whatsapp_alert
+    if not parent_phone:
+        return
+    message = f"{student_name} was marked {status} for {subject}"
+    if time_in and time_in != 'N/A':
+        message += f" at {time_in}"
+    _in_background(send_whatsapp_alert, parent_phone, message + ".")

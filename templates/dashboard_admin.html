@@ -1,0 +1,483 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>Control Room</h1>
+    <p>Cameras, class sessions and the rules that decide who counts as present.</p>
+</header>
+
+<style>
+    .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1.5rem; margin-bottom: 2.5rem; }
+    .kpi { padding: 1.75rem; }
+    .kpi h3 { margin: 0; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--text-muted); }
+    .kpi .stat-value { font-size: 2.4rem; }
+
+    /* The day as a track rather than a list - an admin scans for gaps and
+       overlaps, and a list hides both. */
+    .timeline { position: relative; height: 92px; border-radius: var(--radius-md);
+        background: var(--secondary-color); border: 1px solid var(--border-color); overflow: hidden; }
+    .timeline-block { position: absolute; top: 14px; height: 44px; border-radius: 6px;
+        background: var(--primary-color); color: #fff; padding: 0.35rem 0.6rem; box-sizing: border-box;
+        font-size: 0.72rem; font-weight: 700; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+        cursor: pointer; transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .timeline-block:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(79,70,229,0.35); z-index: 5; }
+    .timeline-block.closed { background: #64748b; }
+    .timeline-block.live { background: var(--success); box-shadow: 0 0 0 2px var(--card-bg), 0 0 0 4px var(--success); }
+    .timeline-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); z-index: 10; }
+    .timeline-now::after { content: 'now'; position: absolute; top: 2px; left: 4px; font-size: 0.6rem;
+        font-weight: 800; color: var(--danger); letter-spacing: 0.08em; text-transform: uppercase; }
+    .timeline-axis { position: absolute; bottom: 4px; left: 0; right: 0; display: flex;
+        justify-content: space-between; padding: 0 0.5rem; font-size: 0.65rem; color: var(--text-muted);
+        font-variant-numeric: tabular-nums; }
+
+    .cam-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.25rem; }
+    .cam { border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; background: var(--card-bg); }
+    .cam-preview { height: 150px; background: #0f172a; display: flex; align-items: center; justify-content: center;
+        color: #475569; font-size: 0.8rem; position: relative; }
+    .cam-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .cam-body { padding: 0.9rem 1rem; }
+    .cam-name { font-weight: 800; }
+    .cam-meta { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.15rem; }
+    .cam-stats { display: flex; gap: 1rem; margin-top: 0.7rem; font-size: 0.72rem; color: var(--text-muted);
+        font-variant-numeric: tabular-nums; }
+
+    /* Thresholds are abstract until you see where they cut. This strip shows
+       the bands the admin is actually editing, and moves as they type. */
+    .band { display: flex; height: 42px; border-radius: var(--radius-md); overflow: hidden;
+        border: 1px solid var(--border-color); font-size: 0.72rem; font-weight: 800; color: #fff; }
+    .band > div { display: flex; align-items: center; justify-content: center; transition: flex-basis 0.25s ease; }
+    .band-absent { background: var(--danger); }
+    .band-partial { background: var(--warning); }
+    .band-present { background: var(--success); }
+    .band-scale { display: flex; justify-content: space-between; font-size: 0.65rem;
+        color: var(--text-muted); margin-top: 0.3rem; font-variant-numeric: tabular-nums; }
+
+    .rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1.25rem 1.5rem; }
+    .rule-hint { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.35rem; line-height: 1.4; }
+    .empty { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); }
+</style>
+
+<div class="kpi-row">
+    <div class="card kpi">
+        <h3>Students on roll</h3>
+        <p class="stat-value">{{ stats.total }}</p>
+    </div>
+    <div class="card kpi">
+        <h3>Present today</h3>
+        <p class="stat-value" style="color: var(--success);">{{ stats.present }}</p>
+    </div>
+    <div class="card kpi">
+        <h3>Classes scheduled</h3>
+        <p class="stat-value">{{ sessions|length }}</p>
+    </div>
+    <div class="card kpi">
+        <h3>Cameras online</h3>
+        <p class="stat-value" style="color: {% if cameras|selectattr('online')|list %}var(--success){% else %}var(--text-muted){% endif %};">
+            {{ cameras|selectattr('online')|list|length }}<span style="font-size: 1.2rem; color: var(--text-muted);">/{{ cameras|length }}</span>
+        </p>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom: 2.5rem;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
+        <div>
+            <h2 style="margin:0;">The day at a glance</h2>
+            <p style="margin:0.3rem 0 0; color:var(--text-muted); font-size:0.9rem;">
+                Sessions built from the timetable for {{ date }}.
+            </p>
+        </div>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+            <form method="get" style="display:flex; gap:0.5rem;">
+                <input type="date" name="date" value="{{ date }}">
+                <button class="btn" type="submit">View</button>
+            </form>
+            <form method="post" action="/admin/materialize">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <button class="btn" type="submit" style="background: var(--secondary-color); color: var(--text-main); box-shadow:none;">
+                    Build today's
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <div style="margin-top:1.75rem;">
+        {% if sessions %}
+            <div class="timeline" id="timeline"></div>
+            <p style="margin:0.85rem 0 0; font-size:0.78rem; color:var(--text-muted);">
+                Green is running now, indigo is still to come, grey has been finalised.
+                Click a block to open its roster.
+            </p>
+        {% else %}
+            <div class="empty">
+                <p style="margin:0 0 0.5rem; font-weight:700;">Nothing scheduled for this date.</p>
+                <p style="margin:0; font-size:0.9rem;">
+                    Sessions are built from the timetable just after midnight.
+                    If you have just added classes, use <em>Build today's</em> to create them now.
+                </p>
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card" style="margin-bottom: 2.5rem;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
+        <div>
+            <h2 style="margin:0;">Cameras</h2>
+            <p style="margin:0.3rem 0 0; color:var(--text-muted); font-size:0.9rem;">
+                Each camera watches the classes timetabled for its room.
+            </p>
+        </div>
+        <a href="/admin/cameras" class="btn">Manage cameras</a>
+    </div>
+
+    <div style="margin-top:1.75rem;">
+        {% if cameras %}
+        <div class="cam-grid">
+            {% for c in cameras %}
+            <div class="cam">
+                <div class="cam-preview" data-camera="{{ c.id }}">
+                    <span class="cam-placeholder">No preview</span>
+                </div>
+                <div class="cam-body">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+                        <span class="cam-name">{{ c.name }}</span>
+                        {% if c.online %}
+                            <span class="badge badge-success">{{ c.heartbeat.state|replace('_', ' ') }}</span>
+                        {% else %}
+                            <span class="badge badge-danger">No signal</span>
+                        {% endif %}
+                    </div>
+                    <div class="cam-meta">
+                        {{ c.room or 'Room not set' }} &middot; source <code>{{ c.source }}</code>
+                    </div>
+                    {% if c.heartbeat and c.heartbeat.state == 'monitoring' %}
+                    <div class="cam-stats">
+                        <span>{{ c.heartbeat.faces }} face(s)</span>
+                        <span>{{ c.heartbeat.identities }} enrolled</span>
+                        <span>{{ c.heartbeat.subject }}</span>
+                    </div>
+                    {% elif c.heartbeat %}
+                    <div class="cam-stats"><span>Last beat {{ c.heartbeat.at[11:16] }}</span></div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty">
+            <p style="margin:0 0 0.5rem; font-weight:700;">No cameras registered yet.</p>
+            <p style="margin:0 0 1.25rem; font-size:0.9rem;">
+                A camera needs a room and a video source before it can watch anything.
+            </p>
+            <a href="/admin/cameras" class="btn">Add the first camera</a>
+        </div>
+        {% endif %}
+
+        <p style="margin:1.25rem 0 0; font-size:0.78rem; color:var(--text-muted);">
+            Live previews and heartbeats travel over Redis. Without it the workers still
+            record attendance, but this panel cannot see them.
+        </p>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom: 2.5rem;">
+    <h2 style="margin:0;">Institution</h2>
+    <p style="margin:0.3rem 0 1.75rem; color:var(--text-muted); font-size:0.9rem;">
+        Your college's name and campus location. These appear on ID cards, warning letters
+        and parent emails, and they decide where mobile check-in is accepted.
+    </p>
+
+    <form method="post" action="/admin/settings">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+        <div class="rules" style="margin-bottom:1.75rem;">
+            <div class="form-group">
+                <label for="institution_name">Full name</label>
+                <input type="text" id="institution_name" name="institution_name"
+                       value="{{ institution.institution_name }}" required>
+            </div>
+            <div class="form-group">
+                <label for="institution_short">Short name</label>
+                <input type="text" id="institution_short" name="institution_short"
+                       value="{{ institution.institution_short }}" required>
+                <div class="rule-hint">Printed on the ID card header.</div>
+            </div>
+            <div class="form-group">
+                <label for="institution_affiliation">Affiliation</label>
+                <input type="text" id="institution_affiliation" name="institution_affiliation"
+                       value="{{ institution.institution_affiliation }}">
+            </div>
+            <div class="form-group">
+                <label for="attendance_required_pct">Attendance requirement (%)</label>
+                <input type="number" id="attendance_required_pct" name="attendance_required_pct"
+                       min="1" max="100" step="1" value="{{ institution.attendance_required_pct|int }}">
+                <div class="rule-hint">The line students are measured against on their dashboard.</div>
+            </div>
+        </div>
+
+        <label style="margin-bottom:0.75rem;">Campus location</label>
+        <p style="margin:0 0 1rem; font-size:0.78rem; color:var(--text-muted);">
+            Drag the pin, or click anywhere on the map, to set where mobile check-in is allowed.
+            The shaded circle is the accepted radius.
+        </p>
+        <div id="campusMap" style="height:320px; border-radius:var(--radius-md);
+                                   border:1px solid var(--border-color); overflow:hidden;"></div>
+
+        <div class="rules" style="margin-top:1.5rem;">
+            <div class="form-group">
+                <label for="campus_lat">Latitude</label>
+                <input type="number" id="campus_lat" name="campus_lat" step="0.000001"
+                       min="-90" max="90" value="{{ institution.campus_lat }}" required>
+            </div>
+            <div class="form-group">
+                <label for="campus_lon">Longitude</label>
+                <input type="number" id="campus_lon" name="campus_lon" step="0.000001"
+                       min="-180" max="180" value="{{ institution.campus_lon }}" required>
+            </div>
+            <div class="form-group">
+                <label for="geofence_radius_m">Check-in radius (metres)</label>
+                <input type="number" id="geofence_radius_m" name="geofence_radius_m"
+                       min="10" max="20000" step="10" value="{{ institution.geofence_radius_m|int }}">
+                <div class="rule-hint">Large enough to cover the whole campus, small enough to exclude home.</div>
+            </div>
+        </div>
+
+        <button class="btn" type="submit" style="margin-top:0.5rem;">Save institution settings</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2 style="margin:0;">Attendance rules</h2>
+    <p style="margin:0.3rem 0 1.75rem; color:var(--text-muted); font-size:0.9rem;">
+        These decide the verdict when a class is finalised. Changes apply to the next
+        session that closes &mdash; classes already finalised keep their result.
+    </p>
+
+    <div style="margin-bottom:2rem;">
+        <div class="band" id="band">
+            <div class="band-absent" id="bandAbsent">Absent</div>
+            <div class="band-partial" id="bandPartial">Partial</div>
+            <div class="band-present" id="bandPresent">Present</div>
+        </div>
+        <div class="band-scale">
+            <span>0% of the class</span><span>50%</span><span>100%</span>
+        </div>
+    </div>
+
+    <form method="post" action="/admin/config">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <div class="rules">
+            <div class="form-group">
+                <label for="present_pct">Present at or above</label>
+                <input type="number" id="present_pct" name="present_pct" min="1" max="100" step="1"
+                       value="{{ config.present_pct|int }}">
+                <div class="rule-hint">Share of the class a student must be in the room for.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="partial_pct">Partial at or above</label>
+                <input type="number" id="partial_pct" name="partial_pct" min="0" max="100" step="1"
+                       value="{{ config.partial_pct|int }}">
+                <div class="rule-hint">Below this, the class counts as an absence.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="grace_minutes">Late after</label>
+                <input type="number" id="grace_minutes" name="grace_minutes" min="0" max="60" step="1"
+                       value="{{ config.grace_minutes|int }}">
+                <div class="rule-hint">Minutes past the start before an arrival is marked Late.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="end_grace_minutes">Left early if gone for</label>
+                <input type="number" id="end_grace_minutes" name="end_grace_minutes" min="0" max="60" step="1"
+                       value="{{ config.end_grace_minutes|int }}">
+                <div class="rule-hint">
+                    Last seen this long before the bell and never again &mdash; counted absent,
+                    however much of the class they sat through.
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="gap_tolerance_s">Ignore absences under</label>
+                <input type="number" id="gap_tolerance_s" name="gap_tolerance_s" min="10" max="900" step="10"
+                       value="{{ config.gap_tolerance_s|int }}">
+                <div class="rule-hint">
+                    Seconds. Covers a student turning away from the camera; a longer gap
+                    ends their presence interval.
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="sample_interval_s">Look every</label>
+                <input type="number" id="sample_interval_s" name="sample_interval_s" min="1" max="30" step="1"
+                       value="{{ config.sample_interval_s|int }}">
+                <div class="rule-hint">Seconds between frames. Lower is more accurate and more CPU.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="close_delay_s">Finalise after</label>
+                <input type="number" id="close_delay_s" name="close_delay_s" min="0" max="3600" step="30"
+                       value="{{ config.close_delay_s|int }}">
+                <div class="rule-hint">Seconds after the end time before verdicts are written.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="sighting_retention_days">Keep raw sightings for</label>
+                <input type="number" id="sighting_retention_days" name="sighting_retention_days" min="1" max="365" step="1"
+                       value="{{ config.sighting_retention_days|int }}">
+                <div class="rule-hint">
+                    Days. Sightings are the evidence behind a verdict, not a permanent record.
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top:1.5rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
+            <button class="btn" type="submit">Save rules</button>
+            <span id="ruleWarning" class="badge badge-warning" style="display:none;">
+                Partial must be below Present
+            </span>
+        </div>
+    </form>
+</div>
+
+<script>
+    const SESSIONS = {{ sessions|tojson }};
+
+    function minutesOf(hhmm) {
+        const [h, m] = hhmm.split(':').map(Number);
+        return h * 60 + m;
+    }
+
+    function drawTimeline() {
+        const track = document.getElementById('timeline');
+        if (!track || !SESSIONS.length) return;
+
+        // Pad the window by 30 min either side so the first and last blocks
+        // aren't flush against the edges.
+        const starts = SESSIONS.map(s => minutesOf(s.start));
+        const ends = SESSIONS.map(s => minutesOf(s.end));
+        const from = Math.min(...starts) - 30;
+        const to = Math.max(...ends) + 30;
+        const span = to - from;
+
+        const pos = mins => ((mins - from) / span) * 100;
+        const now = new Date();
+        const nowMins = now.getHours() * 60 + now.getMinutes();
+
+        SESSIONS.forEach(s => {
+            const start = minutesOf(s.start), end = minutesOf(s.end);
+            const block = document.createElement('div');
+            const isLive = s.status !== 'closed' && nowMins >= start && nowMins < end;
+
+            block.className = 'timeline-block' + (s.status === 'closed' ? ' closed' : isLive ? ' live' : '');
+            block.style.left = pos(start) + '%';
+            block.style.width = Math.max(pos(end) - pos(start), 4) + '%';
+            block.title = `${s.subject} · ${s.course} ${s.year} · ${s.start}–${s.end}`;
+            block.innerText = s.subject;
+            block.onclick = () => window.location = `/teacher?date=${s.date}`;
+            track.appendChild(block);
+        });
+
+        if (nowMins >= from && nowMins <= to) {
+            const marker = document.createElement('div');
+            marker.className = 'timeline-now';
+            marker.style.left = pos(nowMins) + '%';
+            track.appendChild(marker);
+        }
+
+        const axis = document.createElement('div');
+        axis.className = 'timeline-axis';
+        const label = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+        axis.innerHTML = `<span>${label(from)}</span><span>${label(Math.round((from + to) / 2))}</span><span>${label(to)}</span>`;
+        track.appendChild(axis);
+    }
+
+    function paintBands() {
+        const present = Number(document.getElementById('present_pct').value) || 0;
+        const partial = Number(document.getElementById('partial_pct').value) || 0;
+        const valid = partial < present;
+
+        document.getElementById('ruleWarning').style.display = valid ? 'none' : 'inline-flex';
+
+        const absentWidth = Math.max(Math.min(partial, 100), 0);
+        const partialWidth = Math.max(Math.min(present, 100) - absentWidth, 0);
+        document.getElementById('bandAbsent').style.flexBasis = absentWidth + '%';
+        document.getElementById('bandPartial').style.flexBasis = partialWidth + '%';
+        document.getElementById('bandPresent').style.flexBasis = (100 - absentWidth - partialWidth) + '%';
+    }
+
+    // Previews expire after a few seconds, so re-request rather than caching.
+    function refreshPreviews() {
+        document.querySelectorAll('.cam-preview').forEach(box => {
+            const id = box.dataset.camera;
+            const probe = new Image();
+            probe.onload = () => {
+                box.innerHTML = '';
+                box.appendChild(probe);
+            };
+            probe.onerror = () => {
+                if (!box.querySelector('.cam-placeholder')) {
+                    box.innerHTML = '<span class="cam-placeholder">No preview</span>';
+                }
+            };
+            probe.src = `/api/camera/${id}/preview?t=${Date.now()}`;
+        });
+    }
+
+    // Campus picker. Typing coordinates is how you end up checking students in
+    // against a point nobody has ever verified on a map.
+    function initCampusMap() {
+        const latField = document.getElementById('campus_lat');
+        const lonField = document.getElementById('campus_lon');
+        const radiusField = document.getElementById('geofence_radius_m');
+        const start = [parseFloat(latField.value), parseFloat(lonField.value)];
+
+        const map = L.map('campusMap').setView(start, 16);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19, attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+
+        const pin = L.marker(start, { draggable: true }).addTo(map);
+        const fence = L.circle(start, {
+            radius: parseFloat(radiusField.value) || 300,
+            color: '#4f46e5', fillColor: '#4f46e5', fillOpacity: 0.15, weight: 2
+        }).addTo(map);
+
+        function moveTo(latlng) {
+            pin.setLatLng(latlng);
+            fence.setLatLng(latlng);
+            latField.value = latlng.lat.toFixed(6);
+            lonField.value = latlng.lng.toFixed(6);
+        }
+
+        pin.on('drag', e => moveTo(e.target.getLatLng()));
+        map.on('click', e => moveTo(e.latlng));
+        radiusField.addEventListener('input', () => {
+            fence.setRadius(parseFloat(radiusField.value) || 0);
+        });
+
+        // Typed coordinates should move the pin too, not disagree with it.
+        [latField, lonField].forEach(field => field.addEventListener('change', () => {
+            const lat = parseFloat(latField.value), lon = parseFloat(lonField.value);
+            if (!isNaN(lat) && !isNaN(lon)) {
+                pin.setLatLng([lat, lon]);
+                fence.setLatLng([lat, lon]);
+                map.panTo([lat, lon]);
+            }
+        }));
+
+        // Leaflet mis-measures a container that was laid out after it loaded.
+        setTimeout(() => map.invalidateSize(), 200);
+    }
+
+    document.getElementById('present_pct').addEventListener('input', paintBands);
+    document.getElementById('partial_pct').addEventListener('input', paintBands);
+
+    drawTimeline();
+    paintBands();
+    initCampusMap();
+    refreshPreviews();
+    setInterval(refreshPreviews, 5000);
+</script>
+{% endblock %}

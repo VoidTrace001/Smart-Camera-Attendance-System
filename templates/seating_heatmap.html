@@ -1,0 +1,72 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <div>
+            <h1 style="margin: 0;">🗺️ Classroom Seating Spatial Analysis</h1>
+            <p style="color: var(--text-muted); margin: 0.25rem 0 0 0;">
+                Camera: <strong>{{ camera.name }}</strong> | Room: <strong>{{ camera.room }}</strong>
+            </p>
+        </div>
+        <div>
+            <a href="/admin/cameras" class="btn" style="background: var(--secondary-color); color: var(--text-main);">← Back to Cameras</a>
+        </div>
+    </div>
+
+    <div style="background: var(--bg-dark); border-radius: 12px; padding: 2rem; text-align: center; border: 1px solid var(--border-color);">
+        <div style="color: var(--text-muted); font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 1.5rem;">
+            🏫 FRONT OF CLASSROOM / CHALKBOARD
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; max-width: 900px; margin: 0 auto;">
+            {% for row in grid %}
+                {% for col in row %}
+                    <div onclick="inspectSeat({{ col.row_idx }}, {{ col.col_idx }}, {{ col.count }}, {{ col.intensity }})" 
+                        style="
+                        background: rgba({{ col.intensity * 255 }}, {{ (1 - col.intensity) * 150 }}, 100, 0.25);
+                        border: 2px solid {{ 'var(--primary-color)' if col.count > 0 else 'var(--border-color)' }};
+                        border-radius: 12px;
+                        padding: 1.25rem 0.5rem;
+                        min-height: 90px;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        align-items: center;
+                        cursor: pointer;
+                        transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+                    " onmouseover="this.style.transform='scale(1.06) translateY(-4px)'; this.style.boxShadow='var(--shadow-lg)';" onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+                        <div style="font-size: 1.25rem; margin-bottom: 0.25rem;">
+                            {% if col.count > 15 %}🪑🔥
+                            {% elif col.count > 0 %}🪑
+                            {% else %}💤
+                            {% endif %}
+                        </div>
+                        <div style="font-weight: 800; font-size: 0.9rem;">Seat (Row {{ col.row_idx }}, Desk {{ col.col_idx }})</div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">{{ col.count }} Sightings recorded</div>
+                    </div>
+                {% endfor %}
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<script>
+function inspectSeat(row, col, count, intensity) {
+    const status = count > 15 ? '🔥 High Occupancy Zone' : (count > 0 ? '🟢 Active Desk' : '⚪ Unoccupied');
+    Swal.fire({
+        title: `🪑 Desk (${row}, ${col}) Spatial Details`,
+        html: `
+            <div style="text-align: left; font-size: 0.95rem; line-height: 1.6;">
+                <p><strong>Status:</strong> ${status}</p>
+                <p><strong>Total Detection Sightings:</strong> ${count}</p>
+                <p><strong>Relative Activity Density:</strong> ${Math.round(intensity * 100)}%</p>
+                <p style="color: var(--text-muted); font-size: 0.85rem;">Spatial data gathered automatically by classroom camera vision worker.</p>
+            </div>
+        `,
+        icon: 'info',
+        confirmButtonText: 'Close Inspector'
+    });
+}
+</script>
+{% endblock %}

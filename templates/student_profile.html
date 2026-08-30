@@ -1,0 +1,154 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<header>
+    <h1>My Account</h1>
+    <p>Your enrolment details, and the password you sign in with.</p>
+</header>
+
+<style>
+    .account-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr);
+        gap: 2.5rem; align-items: start; }
+    @media (max-width: 860px) { .account-layout { grid-template-columns: 1fr; } }
+
+    .detail-row { display: flex; justify-content: space-between; gap: 1rem; padding: 0.85rem 0;
+        border-bottom: 1px solid var(--border-color); font-size: 0.9rem; }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-row span:first-child { color: var(--text-muted); }
+    .detail-row span:last-child { font-weight: 700; text-align: right; }
+
+    .warn { border-left: 4px solid var(--warning); background: var(--secondary-color);
+        padding: 1.25rem 1.5rem; border-radius: var(--radius-md); margin-bottom: 2rem; }
+    .warn strong { display: block; margin-bottom: 0.35rem; }
+
+    .strength { height: 5px; border-radius: 3px; background: var(--secondary-color);
+        overflow: hidden; margin-top: 0.6rem; }
+    .strength > span { display: block; height: 100%; width: 0; border-radius: 3px;
+        transition: width 0.3s ease, background 0.3s ease; }
+    .strength-note { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem; }
+</style>
+
+<div class="account-layout">
+    <div class="card">
+        <h2 style="margin:0 0 0.35rem;">Change your password</h2>
+        <p style="margin:0 0 2rem; color:var(--text-muted); font-size:0.9rem;">
+            At least 8 characters. Pick something you do not use elsewhere.
+        </p>
+
+        {% if using_default %}
+        <div class="warn">
+            <strong>You are still using your EDC number to sign in.</strong>
+            <span style="font-size:0.88rem; color:var(--text-muted);">
+                That number is printed on your ID card and known to plenty of people around you.
+                Anyone who has it can sign in as you and see your attendance. Please change it now.
+            </span>
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/student/profile">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+
+            <div class="form-group">
+                <label for="current_password">Current password</label>
+                <input type="password" id="current_password" name="current_password" required
+                       autocomplete="current-password"
+                       placeholder="{{ 'Your EDC number' if using_default else 'Current password' }}">
+            </div>
+
+            <div class="form-group">
+                <label for="new_password">New password</label>
+                <input type="password" id="new_password" name="new_password" required minlength="8"
+                       autocomplete="new-password">
+                <div class="strength"><span id="strengthBar"></span></div>
+                <div class="strength-note" id="strengthNote">At least 8 characters.</div>
+            </div>
+
+            <div class="form-group">
+                <label for="confirm_password">Confirm new password</label>
+                <input type="password" id="confirm_password" name="confirm_password" required
+                       autocomplete="new-password">
+                <div class="strength-note" id="matchNote"></div>
+            </div>
+
+            <button class="btn" type="submit" id="submitBtn">Update password</button>
+        </form>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:2rem;">
+        <div class="card">
+            <h3 style="margin:0 0 1.25rem;">Enrolment</h3>
+            <div class="detail-row"><span>Name</span><span>{{ student.name }}</span></div>
+            <div class="detail-row"><span>OU ID</span><span>{{ student.ou_id or '&mdash;' }}</span></div>
+            <div class="detail-row"><span>EDC number</span><span>{{ student.edc_number or '&mdash;' }}</span></div>
+            <div class="detail-row"><span>Course</span><span>{{ student.course }}</span></div>
+            <div class="detail-row"><span>Batch</span><span>{{ student.year }}</span></div>
+            <div class="detail-row"><span>Sign in with</span><span>{{ student.outlook_email or '&mdash;' }}</span></div>
+            <p style="margin:1.5rem 0 0; font-size:0.78rem; color:var(--text-muted); line-height:1.55;">
+                These come from your enrolment record. If something is wrong, the admissions
+                office has to correct it &mdash; you cannot edit it here, and neither can your teachers.
+            </p>
+        </div>
+
+        <div class="card">
+            <h3 style="margin:0 0 1rem;">Your biometric data</h3>
+            <p style="margin:0; font-size:0.85rem; color:var(--text-muted); line-height:1.6;">
+                Your face is stored as a list of 128 numbers, not as a photograph. It is used only
+                to recognise you in class. Camera stills captured when you are marked present are
+                kept privately and are visible to you and to staff, never to other students.
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+    const pw = document.getElementById('new_password');
+    const confirmPw = document.getElementById('confirm_password');
+    const bar = document.getElementById('strengthBar');
+    const note = document.getElementById('strengthNote');
+    const matchNote = document.getElementById('matchNote');
+
+    function score(value) {
+        let points = 0;
+        if (value.length >= 8) points++;
+        if (value.length >= 12) points++;
+        if (/[a-z]/.test(value) && /[A-Z]/.test(value)) points++;
+        if (/\d/.test(value)) points++;
+        if (/[^A-Za-z0-9]/.test(value)) points++;
+        return points;
+    }
+
+    pw.addEventListener('input', () => {
+        const points = score(pw.value);
+        const scale = [
+            { width: '10%', colour: 'var(--danger)',  text: 'Too short.' },
+            { width: '30%', colour: 'var(--danger)',  text: 'Weak.' },
+            { width: '55%', colour: 'var(--warning)', text: 'Getting there.' },
+            { width: '75%', colour: 'var(--warning)', text: 'Reasonable.' },
+            { width: '90%', colour: 'var(--success)', text: 'Strong.' },
+            { width: '100%', colour: 'var(--success)', text: 'Very strong.' },
+        ][points];
+
+        bar.style.width = pw.value ? scale.width : '0';
+        bar.style.background = scale.colour;
+        note.innerText = pw.value ? scale.text : 'At least 8 characters.';
+        checkMatch();
+    });
+
+    function checkMatch() {
+        if (!confirmPw.value) { matchNote.innerText = ''; return; }
+        const same = pw.value === confirmPw.value;
+        matchNote.innerText = same ? 'Passwords match.' : 'Passwords do not match yet.';
+        matchNote.style.color = same ? 'var(--success)' : 'var(--text-muted)';
+    }
+
+    confirmPw.addEventListener('input', checkMatch);
+
+    document.querySelector('form').addEventListener('submit', (e) => {
+        if (pw.value !== confirmPw.value) {
+            e.preventDefault();
+            Swal.fire({ icon: 'error', title: 'Passwords do not match',
+                        text: 'Retype the new password so both boxes agree.' });
+        }
+    });
+</script>
+{% endblock %}

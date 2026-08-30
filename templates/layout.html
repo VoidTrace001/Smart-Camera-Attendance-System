@@ -3,9 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VeriVault AI - Smart Attendance</title>
+    <title>VeriVault - Enterprise Attendance Portal</title>
     <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW reg error:', err));
+            });
+        }
+    </script>
+    <link rel="icon" href="{{ url_for('static', filename='icons/favicon-32.png') }}" sizes="32x32">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
     <meta name="theme-color" content="#4f46e5">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+
+    <script>
+        // Attach the CSRF token to every same-origin write this page makes.
+        // Doing it here rather than at each call site means a fetch() added
+        // later cannot forget it. Must load before any page script runs.
+        (function () {
+            const token = document.querySelector('meta[name="csrf-token"]').content;
+            const safe = ['GET', 'HEAD', 'OPTIONS', 'TRACE'];
+            const nativeFetch = window.fetch;
+
+            window.fetch = function (input, init) {
+                init = init || {};
+                const method = (init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+                const url = typeof input === 'string' ? input : (input && input.url) || '';
+                const sameOrigin = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
+
+                if (!safe.includes(method) && sameOrigin) {
+                    const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+                    headers.set('X-CSRF-Token', token);
+                    init.headers = headers;
+                }
+                return nativeFetch.call(this, input, init);
+            };
+        })();
+    </script>
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
@@ -40,8 +75,10 @@
             --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
             --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
             --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
             --radius-xl: 1rem;
             --sidebar-width: 300px;
+            --sidebar-peek: 10px;
             --transition-all: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
         }
 
@@ -90,11 +127,11 @@
             border-bottom: 1px solid var(--border-color);
         }
 
-        /* Sidebar - PREMIUM HOVER & GLASS */
+        /* Sidebar - tab-driven on touch, hover-driven with a mouse */
         .sidebar {
             position: fixed;
             top: 0;
-            right: -290px;
+            right: calc(var(--sidebar-peek) - var(--sidebar-width));
             width: var(--sidebar-width);
             height: 100vh;
             background-color: var(--sidebar-bg);
@@ -108,8 +145,7 @@
             border-left: 1px solid var(--border-color);
         }
 
-        .sidebar::after {
-            content: 'MENU';
+        .menu-tab {
             writing-mode: vertical-lr;
             position: absolute;
             left: -35px;
@@ -117,6 +153,8 @@
             transform: translateY(-50%);
             width: 35px;
             height: 120px;
+            padding: 0;
+            border: none;
             background: linear-gradient(to bottom, var(--primary-color), #6366f1);
             color: white;
             display: flex;
@@ -124,6 +162,7 @@
             justify-content: center;
             border-radius: 15px 0 0 15px;
             cursor: pointer;
+            font-family: inherit;
             font-size: 0.75rem;
             font-weight: 800;
             letter-spacing: 0.2em;
@@ -131,14 +170,17 @@
             transition: var(--transition-all);
         }
 
-        .sidebar:hover {
+        .menu-tab:focus-visible { outline: 3px solid #fff; outline-offset: -7px; }
+
+        .sidebar.open {
             right: 0;
             box-shadow: -20px 0 50px rgba(0,0,0,0.2);
         }
 
-        .sidebar:hover::after {
+        .sidebar.open .menu-tab {
             opacity: 0;
             left: 0;
+            pointer-events: none;
         }
 
         .sidebar-header {
@@ -162,14 +204,14 @@
             transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
-        .sidebar:hover .nav-group {
+        .sidebar.open .nav-group {
             opacity: 1;
             transform: translateY(0);
         }
 
-        .sidebar:hover .nav-group:nth-child(1) { transition-delay: 0.15s; }
-        .sidebar:hover .nav-group:nth-child(2) { transition-delay: 0.25s; }
-        .sidebar:hover .nav-group:nth-child(3) { transition-delay: 0.35s; }
+        .sidebar.open .nav-group:nth-child(1) { transition-delay: 0.15s; }
+        .sidebar.open .nav-group:nth-child(2) { transition-delay: 0.25s; }
+        .sidebar.open .nav-group:nth-child(3) { transition-delay: 0.35s; }
 
         .sidebar-overlay {
             position: fixed;
@@ -180,15 +222,26 @@
             background: rgba(2, 6, 23, 0.4);
             backdrop-filter: blur(4px);
             z-index: 1500;
-            display: none;
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.5s ease;
         }
 
-        .sidebar:hover ~ .sidebar-overlay {
-            display: block;
+        .sidebar.open ~ .sidebar-overlay {
             opacity: 1;
+            pointer-events: auto;
+        }
+
+        /* Mouse users keep the hover-to-reveal sidebar. Everyone else gets the
+           tab, which is why none of this is in the base rules. */
+        @media (hover: hover) and (pointer: fine) {
+            .sidebar:hover { right: 0; box-shadow: -20px 0 50px rgba(0,0,0,0.2); }
+            .sidebar:hover .menu-tab { opacity: 0; left: 0; pointer-events: none; }
+            .sidebar:hover .nav-group { opacity: 1; transform: translateY(0); }
+            .sidebar:hover .nav-group:nth-child(1) { transition-delay: 0.15s; }
+            .sidebar:hover .nav-group:nth-child(2) { transition-delay: 0.25s; }
+            .sidebar:hover .nav-group:nth-child(3) { transition-delay: 0.35s; }
+            .sidebar:hover ~ .sidebar-overlay { opacity: 1; }
         }
 
         .nav-group { margin-bottom: 2.5rem; }
@@ -401,14 +454,58 @@
         
         [data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea { background-color: #1e293b; border-color: #334155; color: white; }
         input:focus { border-color: var(--primary-color); box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1); }
+
+        /* Row helpers the dashboards use instead of inline flex, so they have
+           something to collapse at a breakpoint. */
+        .metric-row { display: flex; gap: 1.5rem; margin-bottom: 2.5rem; }
+        .split { display: flex; gap: 2rem; }
+        .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+        .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .table-scroll table { min-width: 520px; }
+
+        @media (max-width: 900px) {
+            .metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); }
+            .split { flex-direction: column; }
+            .container { max-width: 100%; margin: 2rem auto; padding: 0 1.25rem; }
+            .card { padding: 1.75rem; }
+            .card:hover { transform: none; }
+            .stat-value { font-size: 2.4rem; }
+        }
+
+        @media (max-width: 640px) {
+            :root { --sidebar-width: min(86vw, 320px); }
+            nav { padding: 0.7rem 1rem; }
+            .container { margin: 1.5rem auto; padding: 0 1rem; }
+            .card { padding: 1.25rem; }
+            .nav-right { gap: 0.85rem !important; }
+            .nav-right .user-meta { display: none; }
+            .sidebar-header { padding: 1.75rem 1.5rem; }
+            .sidebar-content, .sidebar-footer { padding: 1.5rem; }
+            .sidebar-link { padding: 0.95rem 1.1rem; }
+            .menu-tab { width: 44px; left: -44px; }
+            body.nav-open { overflow: hidden; }
+            .sidebar-link:hover { transform: none; }
+            .toast-container { left: 1rem; right: 1rem; bottom: 1.25rem; }
+            .toast { min-width: 0; width: 100%; box-sizing: border-box; padding: 1rem 1.25rem; }
+            th, td { padding: 0.9rem; }
+            .pair { grid-template-columns: 1fr; }
+            /* 16px or Safari zooms the whole page in on focus */
+            input, select, textarea { font-size: 16px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+        }
     </style>
 </head>
 <body>
     <div class="toast-container" id="toastContainer"></div>
 
     {% if session.get('logged_in') %}
-    <!-- Sidebar Navigation (SMART HOVER + GLASS) - Only visible if logged in -->
+    <!-- Sidebar Navigation - Only visible if logged in -->
     <div class="sidebar" id="sidebar">
+        <button type="button" class="menu-tab" id="menuTab" aria-controls="sidebar" aria-expanded="false">Menu</button>
+
         <div class="sidebar-header">
             <div class="logo" style="flex-direction: row; gap: 0.75rem;">
                 <div class="logo-icon"><div class="logo-icon-inner"></div></div>
@@ -423,6 +520,7 @@
                     <a href="/student_dashboard" class="sidebar-link">📊 My Dashboard</a>
                 {% else %}
                     <a href="/" class="sidebar-link">🏠 Main Dashboard</a>
+                    <a href="/teacher" class="sidebar-link">🎥 Live Classes</a>
                     <a href="/scanner" class="sidebar-link" style="color: var(--success); font-weight: 800;">📲 Live Scanner</a>
                     <a href="/timetable" class="sidebar-link">📅 Class Timetable</a>
                     <a href="/attendance" class="sidebar-link">📋 Attendance Reports</a>
@@ -433,6 +531,9 @@
             {% if session.get('role') == 'Admin' %}
             <div class="nav-group">
                 <div class="nav-group-label">Institution Mgmt</div>
+                <a href="/admin" class="sidebar-link">🛠️ Control Room</a>
+                <a href="/admin/cameras" class="sidebar-link">📹 Cameras</a>
+                <a href="/admin/audit" class="sidebar-link">🔒 Audit Trail</a>
                 <a href="/register" class="sidebar-link">👤 Register Student</a>
                 <a href="/teachers" class="sidebar-link">👨‍🏫 Faculty Control</a>
                 <a href="/students" class="sidebar-link">🎓 Student Directory</a>
@@ -441,7 +542,9 @@
 
             <div class="nav-group">
                 <div class="nav-group-label">Personal Control</div>
-                <a href="/manual_attendance" class="sidebar-link">✍️ Manual Override</a>
+                {% if session.get('role') != 'Student' %}
+                    <a href="/manual_attendance" class="sidebar-link">✍️ Manual Override</a>
+                {% endif %}
                 <a href="/profile" class="sidebar-link">⚙️ Profile Settings</a>
                 {% if session.get('role') != 'Student' %}
                     <a href="/register_face" class="sidebar-link">🛡️ Register My Face</a>
@@ -480,7 +583,7 @@
                 <a href="/login" class="btn">Portal Login</a>
             {% else %}
                 <div style="display: flex; align-items: center; gap: 1.5rem;">
-                    <div style="text-align: right;">
+                    <div class="user-meta" style="text-align: right;">
                         <div style="font-size: 0.85rem; font-weight: 800;">{{ session.get('full_name') }}</div>
                         <div style="font-size: 0.7rem; color: var(--success); font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">● Active</div>
                     </div>
@@ -518,7 +621,45 @@
         document.body.setAttribute('data-theme', savedTheme);
         document.getElementById('themeIcon').innerText = savedTheme === 'dark' ? '🌙' : '☀️';
 
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar) {
+            const tab = document.getElementById('menuTab');
+            const overlay = document.getElementById('overlay');
+
+            const setOpen = (open) => {
+                sidebar.classList.toggle('open', open);
+                document.body.classList.toggle('nav-open', open);
+                tab.setAttribute('aria-expanded', open ? 'true' : 'false');
+            };
+
+            tab.addEventListener('click', () => setOpen(!sidebar.classList.contains('open')));
+            overlay.addEventListener('click', () => setOpen(false));
+            sidebar.querySelectorAll('.sidebar-link').forEach(link => {
+                link.addEventListener('click', () => setOpen(false));
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') setOpen(false);
+            });
+        }
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .catch(err => console.warn('Service worker did not register:', err));
+            });
+        }
+
         window.addEventListener('DOMContentLoaded', () => {
+            // DataTables has its own responsive mode, so only the plain tables
+            // need a scroll box to stop them widening the page on a phone.
+            document.querySelectorAll('.container table:not(.datatable)').forEach(table => {
+                if (table.parentElement.classList.contains('table-scroll')) return;
+                const box = document.createElement('div');
+                box.className = 'table-scroll';
+                table.replaceWith(box);
+                box.appendChild(table);
+            });
+
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {
                 const isSuccess = alert.classList.contains('alert-success');
@@ -546,17 +687,84 @@
                     },
                     initComplete: function() {
                         $('.dataTables_wrapper').css('padding', '1rem');
-                        $('.dataTables_filter input').css({
-                            'border-radius': '8px',
-                            'padding': '0.5rem',
-                            'border': '1px solid var(--border-color)',
-                            'background': 'var(--card-bg)',
-                            'color': 'var(--text-main)'
-                        });
-                    }
-                });
+        });
+
+        // --- Interactive Command Palette (Ctrl + K) & Speech Assistant ---
+        function toggleCmdPalette() {
+            const modal = document.getElementById('cmdPaletteModal');
+            if (modal) {
+                const isOpen = modal.style.display === 'flex';
+                modal.style.display = isOpen ? 'none' : 'flex';
+                if (!isOpen) {
+                    document.getElementById('cmdSearchInput').focus();
+                }
+            }
+        }
+
+        function filterCmdLinks(query) {
+            const q = query.toLowerCase();
+            document.querySelectorAll('.cmd-item').forEach(item => {
+                const text = item.innerText.toLowerCase();
+                item.style.display = text.includes(q) ? 'flex' : 'none';
             });
+        }
+
+        function speakAnnouncement(text) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const uttr = new SpeechSynthesisUtterance(text || "VeriVault attendance monitoring system active and running normally.");
+                uttr.rate = 0.95;
+                uttr.pitch = 1.0;
+                window.speechSynthesis.speak(uttr);
+            } else {
+                Swal.fire('Speech synthesis not supported on this browser.');
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                toggleCmdPalette();
+            }
         });
     </script>
+
+    <!-- Floating Interactive Quick Action Dock -->
+    <div style="position: fixed; bottom: 24px; right: 24px; z-index: 3000; display: flex; gap: 0.75rem; align-items: center;">
+        <button onclick="toggleCmdPalette()" class="btn" style="background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-main); border-radius: 50px; padding: 0.75rem 1.25rem; box-shadow: var(--shadow-lg); font-weight: 700; display: flex; align-items: center; gap: 0.5rem; backdrop-filter: blur(12px);">
+            🔍 <span style="font-size: 0.85rem;">Quick Find</span> <kbd style="background: var(--border-color); font-size: 0.7rem; padding: 0.15rem 0.4rem; border-radius: 4px;">Ctrl K</kbd>
+        </button>
+        <button onclick="speakAnnouncement()" class="btn" style="background: var(--primary-color); color: white; border-radius: 50%; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(79,70,229,0.4);" title="Voice Announcement">
+            📢
+        </button>
+    </div>
+
+    <!-- Command Palette Modal -->
+    <div id="cmdPaletteModal" onclick="if(event.target===this) toggleCmdPalette()" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); z-index: 4000; justify-content: center; align-items: flex-start; padding-top: 10vh;">
+        <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; width: 90%; max-width: 600px; padding: 1.5rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);">
+            <div style="display: flex; align-items: center; gap: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; margin-bottom: 1rem;">
+                <span style="font-size: 1.25rem;">🔍</span>
+                <input type="text" id="cmdSearchInput" oninput="filterCmdLinks(this.value)" placeholder="Search commands, pages, system tools..." style="width: 100%; border: none; background: transparent; color: var(--text-main); font-size: 1.1rem; outline: none;">
+                <button onclick="toggleCmdPalette()" style="border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 1.2rem;">✕</button>
+            </div>
+            <div style="max-height: 350px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem;">
+                <a href="/" class="cmd-item" style="display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1rem; border-radius: 10px; color: var(--text-main); text-decoration: none; background: var(--secondary-color); font-weight: 600;">
+                    <span>🏠 Main Dashboard</span> <span style="font-size: 0.75rem; color: var(--text-muted);">Go to Overview</span>
+                </a>
+                <a href="/teacher" class="cmd-item" style="display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1rem; border-radius: 10px; color: var(--text-main); text-decoration: none; background: var(--secondary-color); font-weight: 600;">
+                    <span>🎥 Live Classes & Camera Stream</span> <span style="font-size: 0.75rem; color: var(--text-muted);">Real-time monitoring</span>
+                </a>
+                <a href="/admin/cameras" class="cmd-item" style="display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1rem; border-radius: 10px; color: var(--text-main); text-decoration: none; background: var(--secondary-color); font-weight: 600;">
+                    <span>📹 Camera Management & Seating Maps</span> <span style="font-size: 0.75rem; color: var(--text-muted);">Configure rooms</span>
+                </a>
+                <a href="/timetable" class="cmd-item" style="display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1rem; border-radius: 10px; color: var(--text-main); text-decoration: none; background: var(--secondary-color); font-weight: 600;">
+                    <span>📅 Class Timetable Rules</span> <span style="font-size: 0.75rem; color: var(--text-muted);">Schedules</span>
+                </a>
+                <a href="/attendance" class="cmd-item" style="display: flex; align-items: center; justify-content: space-between; padding: 0.85rem 1rem; border-radius: 10px; color: var(--text-main); text-decoration: none; background: var(--secondary-color); font-weight: 600;">
+                    <span>📋 Attendance Reports</span> <span style="font-size: 0.75rem; color: var(--text-muted);">Exports & Analytics</span>
+                </a>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

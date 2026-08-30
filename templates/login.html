@@ -3,7 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VeriVault AI - Secure Portal Access</title>
+    <title>VeriVault - Secure Portal Access</title>
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    <link rel="icon" href="{{ url_for('static', filename='icons/favicon-32.png') }}" sizes="32x32">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+    <meta name="theme-color" content="#4f46e5">
+    <meta name="mobile-web-app-capable" content="yes">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -241,6 +246,12 @@
             width: 44px; height: 44px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: var(--transition-all); font-size: 1.2rem;
         }
         .theme-toggle-fixed:hover { background: var(--bg-color); transform: rotate(15deg); }
+        @media (max-width: 520px) {
+            .login-left { padding: 1.25rem; }
+            .login-card { padding: 2.25rem 1.5rem; border-radius: 1.25rem; }
+            .shape-1, .shape-3 { display: none; }
+            input, select { font-size: 16px; }
+        }
     </style>
 </head>
 <body data-theme="light">
@@ -272,6 +283,7 @@
             {% endwith %}
 
             <form action="/login" method="POST">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <div class="form-group">
                     <label for="username">Institutional ID</label>
                     <input type="text" id="username" name="username" class="form-control" required placeholder="Email or Username" autocomplete="username">
@@ -291,7 +303,7 @@
             
             <div style="margin-top: 2rem; text-align: center; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
                 <p style="font-size: 0.8rem; color: var(--text-muted);">
-                    Protected by VeriVault Deep AI Recognition.<br>
+                    Protected by VeriVault Enterprise Biometrics.<br>
                     Unauthorized access is strictly prohibited.
                 </p>
             </div>
@@ -326,6 +338,13 @@
         const savedTheme = localStorage.getItem('theme') || 'light';
         document.body.setAttribute('data-theme', savedTheme);
         document.getElementById('themeIcon').innerText = savedTheme === 'dark' ? '🌙' : '☀️';
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .catch(err => console.warn('Service worker did not register:', err));
+            });
+        }
     </script>
 </body>
 </html>
